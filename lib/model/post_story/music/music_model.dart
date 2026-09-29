@@ -45,6 +45,12 @@ class Music {
     this.createdAt,
     this.updatedAt,
     this.user,
+    this.hituneUrl,
+    this.attributionLabel,
+    this.aiPct,
+    this.aiBadge,
+    this.hituneTakenDown,
+    this.openInHitune,
   });
 
   Music.fromJson(dynamic json) {
@@ -63,6 +69,15 @@ class Music {
     updatedAt = json['updated_at'];
     user = json['user'] != null ? User.fromJson(json['user'])
         : null;
+    hituneUrl = json['hitune_url'];
+    attributionLabel = json['attribution_label'];
+    final pct = json['ai_pct'];
+    aiPct = pct is num ? pct.toInt() : int.tryParse('${pct ?? 0}') ?? 0;
+    aiBadge = json['ai_badge'];
+    final td = json['hitune_taken_down'];
+    hituneTakenDown = td is num ? td.toInt() != 0 : td == true;
+    final oi = json['open_in_hitune'];
+    openInHitune = oi is num ? oi.toInt() != 0 : oi == true;
   }
 
   int? id;
@@ -80,6 +95,17 @@ class Music {
   String? updatedAt;
   User? user;
 
+  /// HiTune integration fields (music+disturubution+iyome strategy doc §5).
+  String? hituneUrl;
+  String? attributionLabel;
+  int? aiPct;
+  String? aiBadge;
+  bool? hituneTakenDown;
+  bool? openInHitune;
+
+  bool get isFromHitune => (hituneUrl ?? '').isNotEmpty;
+  bool get isAiGenerated => (aiPct ?? 0) > 0;
+
   Map<String, dynamic> toJson() {
     final map = <String, dynamic>{};
     map['id'] = id;
@@ -95,6 +121,12 @@ class Music {
     map['is_deleted'] = isDeleted;
     map['created_at'] = createdAt;
     map['updated_at'] = updatedAt;
+    map['hitune_url'] = hituneUrl;
+    map['attribution_label'] = attributionLabel;
+    map['ai_pct'] = aiPct;
+    map['ai_badge'] = aiBadge;
+    map['hitune_taken_down'] = hituneTakenDown;
+    map['open_in_hitune'] = openInHitune;
     if (user != null && addedBy == 0) {
       map['user'] = user?.toJson();
     }

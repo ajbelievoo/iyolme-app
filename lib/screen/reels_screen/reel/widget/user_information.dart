@@ -15,6 +15,7 @@ import 'package:shortzz/common/widget/full_name_with_blue_tick.dart';
 import 'package:shortzz/languages/languages_keys.dart';
 import 'package:shortzz/model/post_story/post_model.dart';
 import 'package:shortzz/model/user_model/user_model.dart';
+import 'package:shortzz/screen/audio_details_screen/audio_sheet.dart';
 import 'package:shortzz/screen/hashtag_screen/hashtag_screen.dart';
 import 'package:shortzz/screen/location_screen/location_screen.dart';
 import 'package:shortzz/screen/reels_screen/reel/reel_page_controller.dart';
@@ -57,6 +58,7 @@ class UserInformation extends StatelessWidget {
           UserStats(controller: controller),
           UserLocation(controller: controller),
           UserDescription(controller: controller),
+          ReelSoundAttribution(controller: controller),
         ],
       ),
     );
@@ -351,5 +353,72 @@ class _UserDescriptionState extends State<UserDescription> {
         ],
       ),
     );
+  }
+}
+
+/// HiTune sound attribution row on the reel overlay (strategy doc §5):
+/// "Original Sound by @user on HiTune Music" + optional "AI Original" badge.
+/// Tapping it opens the existing AudioSheet (which carries the
+/// "Listen Full Song on HiTune" button).
+class ReelSoundAttribution extends StatelessWidget {
+  const ReelSoundAttribution({super.key, required this.controller});
+
+  final ReelController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return Obx(() {
+      final music = controller.reelData.value.music;
+      final label = music?.attributionLabel ?? '';
+      final title = music?.title ?? '';
+      final text = label.isNotEmpty
+          ? label
+          : (title.isNotEmpty ? '♪ $title' : '');
+      if (text.isEmpty || (music?.hituneTakenDown ?? false)) {
+        return const SizedBox();
+      }
+      return Padding(
+        padding: const EdgeInsets.only(top: 6),
+        child: InkWell(
+          onTap: () async {
+            FocusManager.instance.primaryFocus?.unfocus();
+            await Get.bottomSheet(AudioSheet(music: music),
+                isScrollControlled: true);
+          },
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(
+                child: Text(
+                  text,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyleCustom.outFitLight300(
+                      color: whitePure(context), opacity: .85, fontSize: 12),
+                ),
+              ),
+              if ((music?.aiBadge ?? '').isNotEmpty) ...[
+                const SizedBox(width: 6),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF8B5CF6).withValues(alpha: 0.25),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(
+                        color: const Color(0xFF8B5CF6).withValues(alpha: 0.7)),
+                  ),
+                  child: Text(
+                    music!.aiBadge!,
+                    style: TextStyleCustom.outFitMedium500(
+                        fontSize: 9, color: const Color(0xFFC4B5FD)),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      );
+    });
   }
 }

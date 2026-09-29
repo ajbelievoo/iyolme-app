@@ -16,6 +16,7 @@ import 'package:shortzz/screen/audio_details_screen/audio_details_screen.dart';
 import 'package:shortzz/utilities/asset_res.dart';
 import 'package:shortzz/utilities/text_style_custom.dart';
 import 'package:shortzz/utilities/theme_res.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class AudioSheet extends StatefulWidget {
   final Music? music;
@@ -126,6 +127,30 @@ class _AudioSheetState extends State<AudioSheet> {
                   style: TextStyleCustom.outFitRegular400(
                       fontSize: 15, color: textDarkGrey(context)),
                 ),
+                if ((widget.music?.aiBadge ?? '').isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  _HiTuneAiBadge(label: widget.music!.aiBadge!),
+                ],
+                if ((widget.music?.attributionLabel ?? '').isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 30),
+                    child: Text(
+                      widget.music!.attributionLabel!,
+                      textAlign: TextAlign.center,
+                      style: TextStyleCustom.outFitRegular400(
+                          fontSize: 12, color: textLightGrey(context)),
+                    ),
+                  ),
+                ],
+                if (widget.music?.hituneTakenDown ?? false) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    'This sound is no longer available',
+                    style: TextStyleCustom.outFitRegular400(
+                        fontSize: 12, color: Colors.redAccent),
+                  ),
+                ],
                 const SizedBox(height: 7),
                 FullNameWithBlueTick(
                   username: widget.music?.user?.username ??
@@ -153,6 +178,27 @@ class _AudioSheetState extends State<AudioSheet> {
                       color: textLightGrey(context), fontSize: 15),
                 ),
                 const SizedBox(height: 25),
+                if ((widget.music?.hituneUrl ?? '').isNotEmpty &&
+                    !(widget.music?.hituneTakenDown ?? false)) ...[
+                  TextButtonCustom(
+                    onTap: () async {
+                      final uri = Uri.tryParse(widget.music!.hituneUrl!);
+                      if (uri != null) {
+                        try {
+                          await launchUrl(uri,
+                              mode: LaunchMode.externalApplication);
+                        } catch (e) {
+                          Loggers.error('HiTune link open failed: $e');
+                        }
+                      }
+                    },
+                    title: 'Listen Full Song on HiTune',
+                    backgroundColor: const Color(0xFF00B7FF),
+                    titleColor: whitePure(context),
+                    horizontalMargin: 40,
+                  ),
+                  const SizedBox(height: 10),
+                ],
                 TextButtonCustom(
                   onTap: () {
                     Get.back();
@@ -241,6 +287,37 @@ class AudioImageWidget extends StatelessWidget {
                     color: whitePure(context))),
           )
       ],
+    );
+  }
+}
+
+/// "AI Original" badge for HiTune AI-generated sounds (strategy doc §3).
+class _HiTuneAiBadge extends StatelessWidget {
+  final String label;
+
+  const _HiTuneAiBadge({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFF8B5CF6).withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFF8B5CF6)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.auto_awesome, size: 12, color: Color(0xFF8B5CF6)),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyleCustom.outFitMedium500(
+                fontSize: 11, color: const Color(0xFF8B5CF6)),
+          ),
+        ],
+      ),
     );
   }
 }

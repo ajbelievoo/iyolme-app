@@ -109,7 +109,7 @@ class SideBarList extends StatelessWidget {
               child: IconWithGift(onTap: controller.onGiftTap, isGifted: isGifted),
             ),
             Visibility(
-              visible: music != null,
+              visible: music != null && !(music.hituneTakenDown ?? false),
               child: IconWithMusic(
                   onAudioTap: () => controller.onAudioTap(music), music: music),
             ),

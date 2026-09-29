@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:figma_squircle_updated/figma_squircle.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:shortzz/common/service/hitune_auth_service.dart';
 import 'package:shortzz/common/widget/custom_divider.dart';
 import 'package:shortzz/common/widget/privacy_policy_text.dart';
 import 'package:shortzz/common/widget/text_button_custom.dart';
@@ -143,9 +144,21 @@ class LoginScreen extends StatelessWidget {
                     SocialBtn(
                         onTap: controller.onGoogleTap,
                         icon: AssetRes.icGoogle),
+                    const SizedBox(width: 16),
+                    SocialBtn(
+                        onTap: () => HituneAuthService.shared.startLogin(),
+                        icon: AssetRes.icMusic),
                   ],
                 ),
-                const SizedBox(height: 28),
+                const SizedBox(height: 14),
+                Center(
+                  child: Text(
+                    'Continue with HiTune',
+                    style: TextStyleCustom.outFitRegular400(
+                        fontSize: 12, color: textLightGrey(context)),
+                  ),
+                ),
+                const SizedBox(height: 14),
                 InkWell(
                   onTap: () {
                     controller.fullNameController.clear();
