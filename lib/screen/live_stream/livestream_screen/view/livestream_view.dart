@@ -1,0 +1,1098 @@
+import 'dart:async';
+import 'dart:ui';
+
+import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:shortzz/common/extensions/string_extension.dart';
+import 'package:shortzz/common/manager/haptic_manager.dart';
+import 'package:shortzz/common/widget/custom_image.dart';
+import 'package:shortzz/common/widget/full_name_with_blue_tick.dart';
+import 'package:shortzz/common/widget/loader_widget.dart';
+import 'package:shortzz/common/widget/text_button_custom.dart';
+import 'package:shortzz/model/livestream/app_user.dart';
+import 'package:shortzz/model/livestream/livestream.dart';
+import 'package:shortzz/model/livestream/livestream_user_state.dart';
+import 'package:shortzz/screen/live_stream/livestream_screen/audience/widget/live_stream_user_info_sheet.dart';
+import 'package:shortzz/screen/live_stream/livestream_screen/livestream_screen_controller.dart';
+import 'package:shortzz/screen/live_stream/livestream_screen/widget/members_sheet.dart';
+import 'package:shortzz/utilities/asset_res.dart';
+import 'package:shortzz/utilities/text_style_custom.dart';
+import 'package:shortzz/utilities/theme_res.dart';
+
+class LivestreamView extends StatelessWidget {
+  final RxList<StreamView> streamViews;
+  final LivestreamScreenController controller;
+
+  const LivestreamView(
+      {super.key, required this.streamViews, required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    return Obx(() {
+      Livestream stream = controller.liveData.value;
+      final hostId = stream.hostId.toString();
+      final views =
+          List<StreamView>.from(streamViews); // Optional: clone if needed
+
+      // If battle is running/waiting, focus host + selected opponent when available
+      if ((stream.type == LivestreamType.battle ||
+              stream.battleType == BattleType.waiting ||
+              stream.battleType == BattleType.running) &&
+          (controller.selectedBattleOpponentId.value > 0 ||
+              stream.battleOpponentId > 0)) {
+        final oppId = (controller.selectedBattleOpponentId.value > 0
+                ? controller.selectedBattleOpponentId.value
+                : stream.battleOpponentId)
+            .toString();
+        final hostV = views.firstWhereOrNull((v) => v.streamId == hostId);
+        final oppV = views.firstWhereOrNull((v) => v.streamId == oppId);
+        final focused = <StreamView>[if (hostV != null) hostV, if (oppV != null) oppV];
+        return focused.isEmpty
+            ? const SizedBox()
+            : OneAndTwoUserView(controller: controller, streamViews: focused);
+      }
+
+      final hostIndex = views.indexWhere((v) => v.streamId == hostId);
+      if (hostIndex != -1 && hostIndex != 0) {
+        final hostView = views.removeAt(hostIndex);
+        views.insert(0, hostView);
+      }
+
+      // Apply slots cap (1-8)
+      final slots = (stream.liveLayoutSlots).clamp(1, 8);
+      final cappedViews = views.take(slots).toList();
+      int coHostCount = cappedViews.length;
+      List<AppUser> liveUsers = controller.firestoreController.users;
+      List<AppUser> allUsers = stream.getAllUsers(liveUsers);
+
+      if (allUsers.isEmpty) {
+        return _buildEmptyView();
+      }
+
+      if (cappedViews.isEmpty) {
+        return const LoaderWidget();
+      }
+
+      // Audio mode seats
+      if (stream.liveLayoutMode.toLowerCase() == 'audio') {
+        return _AudioSeatsView(
+          controller: controller,
+          streamViews: cappedViews,
+          seats: stream.audioSeatCount.clamp(1, 10),
+        );
+      }
+
+      // Video mode
+      if (slots == 1 || coHostCount == 1) {
+        return LiveStreamUserView(
+          isNameAndSpeakerVisible: false,
+          streamingView: cappedViews.first,
+          controller: controller,
+        );
+      }
+
+      // Build placeholders for empty slots so sections always match selected slots
+      final videoItems = List<StreamView?>.generate(
+        slots,
+        (i) => i < cappedViews.length ? cappedViews[i] : null,
+      );
+
+      if (slots == 2) {
+        return OneAndTwoUserView(
+          controller: controller,
+          streamViews: cappedViews,
+        );
+      }
+
+      if (slots == 3) {
+        return _VideoSlotsGridView(
+          controller: controller,
+          items: videoItems,
+          crossAxisCount: 2,
+          childAspectRatio: 9 / 16,
+        );
+      }
+
+      if (slots == 4) {
+        return _VideoSlotsGridView(
+          controller: controller,
+          items: videoItems,
+          crossAxisCount: 2,
+          childAspectRatio: 9 / 16,
+        );
+      }
+
+      return _VideoSlotsGridView(
+        controller: controller,
+        items: videoItems,
+        crossAxisCount: slots <= 6 ? 3 : 4,
+        childAspectRatio: 9 / 16,
+      );
+    });
+  }
+
+  Widget _buildEmptyView() {
+    return Center(
+        child: Text(
+      'No users in livestream',
+      style: TextStyleCustom.unboundedMedium500(color: Colors.white),
+    ));
+  }
+}
+
+class _RotatingRoleTag extends StatefulWidget {
+  final String roleLabel;
+  final String name;
+  final Color color;
+
+  const _RotatingRoleTag({
+    required this.roleLabel,
+    required this.name,
+    required this.color,
+  });
+
+  @override
+  State<_RotatingRoleTag> createState() => _RotatingRoleTagState();
+}
+
+class _RotatingRoleTagState extends State<_RotatingRoleTag> {
+  Timer? _timer;
+  bool _showRole = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (!mounted) return;
+      setState(() {
+        _showRole = !_showRole;
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final text = (_showRole ? widget.roleLabel : widget.name).trim();
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: widget.color,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        text,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        textAlign: TextAlign.center,
+        style: TextStyleCustom.unboundedSemiBold600(
+          fontSize: 9,
+          color: Colors.white,
+        ),
+      ),
+    );
+  }
+}
+
+class _AudioSeatsView extends StatelessWidget {
+  final LivestreamScreenController controller;
+  final List<StreamView> streamViews;
+  final int seats;
+
+  const _AudioSeatsView(
+      {required this.controller, required this.streamViews, required this.seats});
+
+  @override
+  Widget build(BuildContext context) {
+    final seatMap = controller.liveData.value.audioSeatMap;
+    const lockedValue = LivestreamScreenController.lockedSeatValue;
+    final occupantIds = List<int?>.generate(seats, (i) {
+      final raw = seatMap['$i'];
+      final uid = (raw is int) ? raw : int.tryParse('$raw');
+      if (uid == null || uid <= 0) return null;
+      return uid;
+    });
+
+    final crossAxisCount = seats <= 8 ? 4 : 5;
+    final spacing = seats <= 8 ? 12.0 : 8.0;
+    // 8 seats has the tallest tile content (name + avatar + seat label).
+    // Make cells slightly taller to avoid RenderFlex overflow on some devices.
+    final aspectRatio = seats <= 7
+        ? 0.95
+        : seats == 8
+            ? 0.82
+            : 0.84;
+
+    return GridView.builder(
+      padding: EdgeInsets.only(
+        left: 12,
+        right: 12,
+        top: 104,
+        bottom: seats <= 8 ? 140 : 120,
+      ),
+      physics: const BouncingScrollPhysics(),
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: crossAxisCount,
+        mainAxisSpacing: spacing,
+        crossAxisSpacing: spacing,
+        childAspectRatio: aspectRatio,
+      ),
+      itemCount: occupantIds.length,
+      itemBuilder: (context, index) {
+        final occupantUserId = occupantIds[index];
+        final raw = seatMap['$index'];
+        final isLocked = raw == lockedValue;
+        return _AudioSeatTile(
+          controller: controller,
+          occupantUserId: occupantUserId,
+          index: index,
+          isLocked: isLocked,
+        );
+      },
+    );
+  }
+}
+
+class _AudioSeatTile extends StatelessWidget {
+  final LivestreamScreenController controller;
+  final int? occupantUserId;
+  final int index;
+  final bool isLocked;
+
+  const _AudioSeatTile(
+      {required this.controller,
+      required this.occupantUserId,
+      required this.index,
+      required this.isLocked});
+
+  @override
+  Widget build(BuildContext context) {
+    return Obx(() {
+    final seats = controller.liveData.value.audioSeatCount.clamp(1, 10);
+    final bool dense = seats >= 10;
+    final double avatarSize = dense ? 46 : (seats <= 7 ? 56 : 50);
+    final double nameFontSize = dense ? 9 : 10;
+    final parsedUserId = occupantUserId;
+    final user = parsedUserId == null
+        ? null
+        : controller.firestoreController.users
+            .firstWhereOrNull((u) => u.userId == parsedUserId);
+
+    final seatName = (user?.username ?? user?.fullname ?? '').toString();
+
+    final myId = controller.myUserId;
+    final myState = controller.liveUsersStates
+        .firstWhereOrNull((e) => e.userId == myId);
+    final isMySeat = parsedUserId != null && parsedUserId == myId;
+    final isHost = controller.isHost;
+
+    final isPrivileged = myState?.type == LivestreamUserType.host ||
+        myState?.type == LivestreamUserType.coHost;
+
+    final occupantState = parsedUserId == null
+        ? null
+        : controller.liveUsersStates
+            .firstWhereOrNull((e) => e.userId == parsedUserId);
+    final showMicOff = parsedUserId != null &&
+        occupantState != null &&
+        occupantState.audioStatus != VideoAudioStatus.on;
+
+    final isSpeaking = parsedUserId != null &&
+        controller.speakingUserIds.contains(parsedUserId);
+    final showSpeakingWave = occupantState != null &&
+        (occupantState.type == LivestreamUserType.host ||
+            occupantState.type == LivestreamUserType.coHost) &&
+        isSpeaking;
+
+    void openProfileSheet() {
+      if (parsedUserId == null) return;
+      final liveUser = controller.firestoreController.users
+          .firstWhereOrNull((u) => u.userId == parsedUserId);
+      if (liveUser == null) return;
+      final myId = controller.myUserId;
+      final myState = controller.liveUsersStates
+          .firstWhereOrNull((e) => e.userId == myId);
+      final isPrivileged = myState?.type == LivestreamUserType.host ||
+          myState?.type == LivestreamUserType.coHost;
+      Get.bottomSheet(
+        LiveStreamUserInfoSheet(
+          isAudience: !isPrivileged,
+          liveUser: liveUser,
+          controller: controller,
+        ),
+        isScrollControlled: true,
+      );
+    }
+
+    void openActions({required bool isLongPress}) {
+      // Empty seat
+      if (parsedUserId == null) {
+        if (!controller.isAudioRoom) return;
+
+        void openPrivilegedEmptySeatSheet() {
+          Get.bottomSheet(
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+              decoration: BoxDecoration(
+                color: whitePure(context),
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(20)),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (isHost) ...[
+                    TextButtonCustom(
+                      title: 'Invite',
+                      onTap: () {
+                        Get.back();
+                        Get.bottomSheet(
+                          const MembersSheet(isHost: true),
+                          isScrollControlled: true,
+                        );
+                      },
+                      backgroundColor: Colors.black.withValues(alpha: .08),
+                      titleColor: textDarkGrey(context),
+                    ),
+                    const SizedBox(height: 10),
+                  ],
+                  TextButtonCustom(
+                    title: isLocked ? 'Unlock' : 'Lock',
+                    onTap: () {
+                      Get.back();
+                      if (isLocked) {
+                        controller.unlockAudioSeat(index);
+                      } else {
+                        controller.lockAudioSeat(index);
+                      }
+                    },
+                    backgroundColor: Colors.black.withValues(alpha: .08),
+                    titleColor: textDarkGrey(context),
+                  ),
+                  const SizedBox(height: 10),
+                  TextButtonCustom(
+                    title: 'Switch',
+                    onTap: () {
+                      Get.back();
+                      if (isLocked) {
+                        controller.showSnackBar('Seat locked hai');
+                        return;
+                      }
+                      controller.assignAudioSeat(seatIndex: index, userId: myId);
+                    },
+                    backgroundColor: Colors.black.withValues(alpha: .08),
+                    titleColor: textDarkGrey(context),
+                  ),
+                ],
+              ),
+            ),
+            isScrollControlled: true,
+          );
+        }
+
+        // Seat NO.1 remains reserved for host.
+        // Privileged users (host/cohost) can manage seats.
+        if (isPrivileged) {
+          openPrivilegedEmptySeatSheet();
+          return;
+        }
+
+        // Normal audience cannot auto sit.
+        if (!isHost) {
+          if (isLocked) {
+            controller.showSnackBar('Seat locked hai');
+            return;
+          }
+          if (index == 0) {
+            controller.showSnackBar('Seat NO.1 host ke liye reserved hai');
+            return;
+          }
+          // Audience/cohost cannot auto sit.
+          // They must send a request and host accepts from Requests.
+          controller.onVideoRequestSend(controller.liveData.value);
+          return;
+        }
+
+        // Host empty seat -> show options sheet as per OlaParty UX
+        openPrivilegedEmptySeatSheet();
+        return;
+      }
+
+      // Occupied seat
+      // occupantState already resolved above
+
+      // Tap on someone seat -> open profile (for everyone)
+      if (!isLongPress && !isMySeat) {
+        openProfileSheet();
+        return;
+      }
+
+      // Tap on my seat -> open profile (host wants to view own profile)
+      if (!isLongPress && isMySeat) {
+        openProfileSheet();
+        return;
+      }
+
+      if (isMySeat) {
+        Get.bottomSheet(
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+            decoration: BoxDecoration(
+              color: whitePure(context),
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(20)),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextButtonCustom(
+                  title: 'Leave Seat',
+                  onTap: () {
+                    Get.back();
+                    controller.clearAudioSeat(index);
+                  },
+                  backgroundColor: Colors.black.withValues(alpha: .08),
+                  titleColor: textDarkGrey(context),
+                ),
+              ],
+            ),
+          ),
+          isScrollControlled: true,
+        );
+        return;
+      }
+
+      // Privileged controls for occupied seat (host/cohost)
+      if (isPrivileged && occupantState != null) {
+        Get.bottomSheet(
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+            decoration: BoxDecoration(
+              color: whitePure(context),
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(20)),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextButtonCustom(
+                  title: 'Remove From Seat',
+                  onTap: () {
+                    Get.back();
+                    controller.clearAudioSeat(index);
+                  },
+                  backgroundColor: Colors.black.withValues(alpha: .08),
+                  titleColor: textDarkGrey(context),
+                ),
+              ],
+            ),
+          ),
+          isScrollControlled: true,
+        );
+      }
+    }
+
+    return InkWell(
+      onTap: () => openActions(isLongPress: false),
+      onLongPress: () => openActions(isLongPress: true),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+          SizedBox(
+            height: avatarSize,
+            width: avatarSize,
+            child: Stack(
+              children: [
+                Container(
+                  height: avatarSize,
+                  width: avatarSize,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.white.withValues(alpha: .12),
+                  ),
+                  child: parsedUserId == null
+                      ? (isLocked
+                          ? Center(
+                              child: Icon(
+                                Icons.lock,
+                                color: Colors.white.withValues(alpha: .75),
+                                size: 22,
+                              ),
+                            )
+                          : Center(
+                              child: Icon(
+                                Icons.add,
+                                color: Colors.white.withValues(alpha: .7),
+                                size: 26,
+                              ),
+                            ))
+                      : CustomImage(
+                          size: Size(avatarSize, avatarSize),
+                          image: user?.profile?.addBaseURL(),
+                          fullName: user?.fullname,
+                          strokeWidth: 2,
+                          strokeColor: occupantState?.type == LivestreamUserType.host
+                              ? const Color(0xFFFFD54F)
+                              : (occupantState?.type == LivestreamUserType.coHost
+                                  ? const Color(0xFF64B5F6)
+                                  : Colors.white.withValues(alpha: .3)),
+                        ),
+                ),
+                if (showMicOff)
+                  PositionedDirectional(
+                    bottom: -1,
+                    end: -1,
+                    child: Container(
+                      height: 18,
+                      width: 18,
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: .35),
+                        shape: BoxShape.circle,
+                      ),
+                      alignment: Alignment.center,
+                      child: Icon(
+                        Icons.mic_off,
+                        size: 12,
+                        color: Colors.white.withValues(alpha: .9),
+                      ),
+                    ),
+                  ),
+                if (showSpeakingWave)
+                  PositionedDirectional(
+                    top: -2,
+                    end: -2,
+                    child: Container(
+                      height: 18,
+                      width: 18,
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: .35),
+                        shape: BoxShape.circle,
+                      ),
+                      alignment: Alignment.center,
+                      child: Icon(
+                        Icons.graphic_eq,
+                        size: 12,
+                        color: Colors.white.withValues(alpha: .9),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          SizedBox(height: dense ? 3 : 4),
+          if (seatName.trim().isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2),
+              child: Builder(
+                builder: (_) {
+                  final isRoleTag = occupantState?.type == LivestreamUserType.host ||
+                      occupantState?.type == LivestreamUserType.coHost;
+                  if (isRoleTag) {
+                    final color = occupantState?.type == LivestreamUserType.host
+                        ? const Color(0xFFFFB300)
+                        : const Color(0xFF1E88E5);
+                    final role = occupantState?.type == LivestreamUserType.host
+                        ? 'HOST'
+                        : 'COHOST';
+                    return Align(
+                      alignment: Alignment.center,
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: _RotatingRoleTag(
+                          roleLabel: role,
+                          name: seatName,
+                          color: color,
+                        ),
+                      ),
+                    );
+                  }
+                  return Align(
+                    alignment: Alignment.center,
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: _SeatNameMarquee(
+                        text: seatName,
+                        style: TextStyleCustom.outFitRegular400(
+                          fontSize: nameFontSize,
+                          color: Colors.white.withValues(alpha: .85),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            )
+          else
+            SizedBox(height: dense ? 6 : 12),
+          SizedBox(height: dense ? 1 : 2),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              'NO.${index + 1}',
+              style: TextStyleCustom.outFitMedium500(
+                fontSize: 10,
+                color: Colors.white.withValues(alpha: .9),
+              ),
+            ),
+          ),
+            ],
+          );
+        },
+      ),
+    );
+    });
+  }
+}
+
+class _SeatNameMarquee extends StatefulWidget {
+  final String text;
+  final TextStyle style;
+
+  const _SeatNameMarquee({required this.text, required this.style});
+
+  @override
+  State<_SeatNameMarquee> createState() => _SeatNameMarqueeState();
+}
+
+class _SeatNameMarqueeState extends State<_SeatNameMarquee>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 5),
+    );
+    _controller.repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, c) {
+        final maxW = c.maxWidth;
+        final tp = TextPainter(
+          text: TextSpan(text: widget.text, style: widget.style),
+          maxLines: 1,
+          textDirection: TextDirection.ltr,
+        )..layout(maxWidth: double.infinity);
+
+        final textW = tp.width;
+        if (textW <= maxW) {
+          return Text(
+            widget.text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: widget.style,
+          );
+        }
+
+        final overflow = (textW - maxW).clamp(0, double.infinity);
+        return ClipRect(
+          child: SizedBox(
+            height: tp.height,
+            width: maxW,
+            child: AnimatedBuilder(
+              animation: _controller,
+              builder: (context, _) {
+                final dx = -overflow * _controller.value;
+                return Transform.translate(
+                  offset: Offset(dx, 0),
+                  child: Text(
+                    widget.text,
+                    maxLines: 1,
+                    overflow: TextOverflow.visible,
+                    style: widget.style,
+                  ),
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _VideoSlotsGridView extends StatelessWidget {
+  final LivestreamScreenController controller;
+  final List<StreamView?> items;
+  final int crossAxisCount;
+  final double childAspectRatio;
+
+  const _VideoSlotsGridView({
+    required this.controller,
+    required this.items,
+    required this.crossAxisCount,
+    required this.childAspectRatio,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GridView.builder(
+      padding: EdgeInsets.zero,
+      physics: const NeverScrollableScrollPhysics(),
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: crossAxisCount,
+        childAspectRatio: childAspectRatio,
+      ),
+      itemCount: items.length,
+      itemBuilder: (context, index) {
+        final it = items[index];
+        if (it == null) {
+          return Container(
+            color: Colors.black.withValues(alpha: .25),
+          );
+        }
+        return LiveStreamUserView(
+          isNameAndSpeakerVisible: index != 0,
+          controller: controller,
+          streamingView: it,
+        );
+      },
+    );
+  }
+}
+
+class OneAndTwoUserView extends StatelessWidget {
+  final LivestreamScreenController controller;
+  final List<StreamView> streamViews;
+
+  const OneAndTwoUserView({
+    super.key,
+    required this.controller,
+    required this.streamViews,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: List.generate(
+        streamViews.length,
+        (index) => Expanded(
+          child: LiveStreamUserView(
+            isNameAndSpeakerVisible: index != 0,
+            controller: controller,
+            streamingView: streamViews[index],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class ThreeUserView extends StatelessWidget {
+  final LivestreamScreenController controller;
+  final List<StreamView> streamViews;
+
+  const ThreeUserView({
+    super.key,
+    required this.controller,
+    required this.streamViews,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        _buildMainUserView(streamViews.first),
+        _buildSecondaryUsersRow(streamViews.sublist(1)),
+      ],
+    );
+  }
+
+  Widget _buildMainUserView(StreamView user) {
+    return Expanded(
+      child: LiveStreamUserView(
+        isNameAndSpeakerVisible: false,
+        controller: controller,
+        streamingView: streamViews.first,
+      ),
+    );
+  }
+
+  Widget _buildSecondaryUsersRow(List<StreamView> streamViews) {
+    return Expanded(
+      child: Row(
+        children: [
+          for (final streamView in streamViews.take(2))
+            Expanded(
+              child: LiveStreamUserView(
+                controller: controller,
+                streamingView: streamView,
+              ),
+            ),
+          if (streamViews.length < 2) ...[
+            for (int i = 0; i < 2 - streamViews.length; i++)
+              Expanded(child: _buildEmptyUserView()),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class FourUserView extends StatelessWidget {
+  final LivestreamScreenController controller;
+  final List<StreamView> streamViews;
+
+  const FourUserView(
+      {super.key, required this.controller, required this.streamViews});
+
+  @override
+  Widget build(BuildContext context) {
+    if (streamViews.isEmpty) return _buildEmptyView();
+
+    return Column(
+      children: [
+        _buildTopRow(streamViews.take(2)),
+        _buildBottomRow(streamViews.skip(2)),
+      ],
+    );
+  }
+
+  Widget _buildTopRow(Iterable<StreamView> streamViews) {
+    return Expanded(
+      child: Row(
+        children: [
+          for (final user in streamViews.take(2))
+            Expanded(
+              child: LiveStreamUserView(
+                  isNameAndSpeakerVisible:
+                      streamViews.toList().indexOf(user) != 0,
+                  controller: controller,
+                  streamingView: user),
+            ),
+          if (streamViews.length < 2) Expanded(child: _buildEmptyUserView()),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBottomRow(Iterable<StreamView> streamViews) {
+    return Expanded(
+      child: Row(
+        children: [
+          for (final user in streamViews.take(2))
+            Expanded(
+              child: LiveStreamUserView(
+                controller: controller,
+                streamingView: user,
+              ),
+            ),
+          if (streamViews.length < 2)
+            for (int i = 0; i < 2 - streamViews.length; i++)
+              Expanded(child: _buildEmptyUserView()),
+        ],
+      ),
+    );
+  }
+}
+
+class LiveStreamUserView extends StatelessWidget {
+  final bool isNameAndSpeakerVisible;
+  final AlignmentGeometry? alignment;
+  final StreamView? streamingView;
+  final LivestreamScreenController controller;
+
+  const LiveStreamUserView({
+    super.key,
+    this.isNameAndSpeakerVisible = true,
+    this.alignment,
+    required this.streamingView,
+    required this.controller,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Obx(() {
+      final parsedUserId = int.tryParse(streamingView?.streamId ?? '');
+      LivestreamUserState? state = parsedUserId == null
+          ? null
+          : controller.liveUsersStates.firstWhereOrNull(
+              (element) => element.userId == parsedUserId,
+            );
+      AppUser? liveUser = parsedUserId == null
+          ? null
+          : controller.firestoreController.users.firstWhereOrNull(
+              (element) => element.userId == parsedUserId,
+            );
+
+      final isSpeaking = parsedUserId != null &&
+          controller.speakingUserIds.contains(parsedUserId);
+      final showSpeakingWave = state != null &&
+          (state.type == LivestreamUserType.host ||
+              state.type == LivestreamUserType.coHost) &&
+          isSpeaking;
+
+      return Stack(
+        children: [
+          if (streamingView != null) streamingView!.streamView,
+          if (state?.videoStatus != VideoAudioStatus.on)
+            Stack(
+              children: [
+                CustomImage(
+                    size: Size(Get.width, Get.height),
+                    image: liveUser?.profile?.addBaseURL(),
+                    fullName: liveUser?.fullname,
+                    radius: 0),
+                LayoutBuilder(
+                  builder: (context, constraints) => ClipRect(
+                    child: BackdropFilter(
+                        filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
+                        child: Container(
+                          width: constraints.maxWidth,
+                          height: constraints.maxHeight,
+                          color: Colors.black.withValues(alpha: .5),
+                        )),
+                  ),
+                ),
+                Align(
+                  alignment: Alignment.center,
+                  child: LayoutBuilder(builder: (context, constraints) {
+                    double width = ((constraints.maxWidth * 50) / 100);
+                    return CustomImage(
+                        size: Size(width, width),
+                        image: liveUser?.profile?.addBaseURL(),
+                        fullName: liveUser?.fullname,
+                        strokeWidth: 3);
+                  }),
+                ),
+              ],
+            ),
+          if (state?.audioStatus != VideoAudioStatus.on)
+            Align(
+                alignment: Alignment.center,
+                child: Image.asset(
+                  AssetRes.icMicOff,
+                  height: 25,
+                  width: 25,
+                  color: whitePure(context).withValues(alpha: .6),
+                )),
+          if (showSpeakingWave)
+            Align(
+              alignment: AlignmentDirectional.topEnd,
+              child: Padding(
+                padding: const EdgeInsets.all(10),
+                child: Container(
+                  height: 20,
+                  width: 20,
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: .35),
+                    shape: BoxShape.circle,
+                  ),
+                  alignment: Alignment.center,
+                  child: Icon(
+                    Icons.graphic_eq,
+                    size: 14,
+                    color: Colors.white.withValues(alpha: .9),
+                  ),
+                ),
+              ),
+            ),
+          if (isNameAndSpeakerVisible)
+            _buildUserInfoOverlay(context,
+                streamView: streamingView!,
+                state: state.obs,
+                liveUser: liveUser,
+                isMuteVisible: liveUser?.userId != controller.myUserId)
+        ],
+      );
+    });
+  }
+
+  Widget _buildUserInfoOverlay(BuildContext context,
+      {required AppUser? liveUser,
+      required Rx<LivestreamUserState?> state,
+      required StreamView? streamView,
+      required bool isMuteVisible}) {
+    return Align(
+      alignment: alignment ?? AlignmentDirectional.topStart,
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          spacing: 5,
+          children: [
+            FullNameWithBlueTick(
+              userId: liveUser?.userId,
+              username: liveUser?.username,
+              fontColor: whitePure(context),
+              fontSize: 12,
+              isVerify: liveUser?.isVerify,
+              onTap: () => _showUserActionSheet(liveUser!, state),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showUserActionSheet(AppUser user, Rx<LivestreamUserState?> state) {
+    Get.bottomSheet(
+      LiveStreamUserInfoSheet(
+          isAudience: !controller.isHost, liveUser: user, controller: controller),
+      isScrollControlled: true,
+    );
+  }
+}
+
+class MuteUnMuteButton extends StatelessWidget {
+  final RxBool isMute;
+  final VoidCallback? onTap;
+
+  const MuteUnMuteButton({super.key, required this.isMute, this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: () {
+        HapticManager.shared.light();
+        onTap?.call();
+      },
+      child: Obx(
+        () => Image.asset(
+          isMute.value ? AssetRes.icSpeakerMute : AssetRes.icSpeaker,
+          width: 24,
+          height: 24,
+          color: whitePure(context).withValues(alpha: .5),
+        ),
+      ),
+    );
+  }
+}
+
+// Helper extensions for common widgets
+extension on Widget {
+  Widget _buildEmptyUserView() {
+    return Container(
+      color: Colors.grey[800],
+      child: const Center(child: Icon(Icons.person_off, color: Colors.white54)),
+    );
+  }
+
+  Widget _buildEmptyView() {
+    return const Center(child: Text('No users in livestream'));
+  }
+}

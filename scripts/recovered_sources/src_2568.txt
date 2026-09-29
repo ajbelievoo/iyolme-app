@@ -1,0 +1,16 @@
+wfile:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/petitparser-7.0.2/lib/src/parser/character/predicate.dart‰import 'package:meta/meta.dart';
+
+/// Abstract class for character predicates.
+@immutable
+abstract class CharacterPredicate {
+  const CharacterPredicate();
+
+  /// Tests if the [charCode] satisfies the predicate.
+  bool test(int charCode);
+
+  /// Compares the predicate and [other] for equality.
+  bool isEqualTo(CharacterPredicate other);
+
+  @override
+  String toString() => '$runtimeType';
+}

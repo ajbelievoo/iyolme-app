@@ -1,0 +1,81 @@
+import 'package:flutter/material.dart';
+import 'package:shortzz/common/manager/session_manager.dart';
+import 'package:shortzz/model/user_model/user_model.dart';
+import 'package:shortzz/screen/ads_manager/tab/ads_campaigns_tab.dart';
+import 'package:shortzz/screen/ads_manager/tab/ads_admin_tab.dart';
+import 'package:shortzz/screen/ads_manager/tab/ads_dashboard_tab.dart';
+import 'package:shortzz/screen/ads_manager/tab/ads_earnings_tab.dart';
+import 'package:shortzz/screen/ads_manager/tab/ads_wallet_tab.dart';
+import 'package:shortzz/utilities/theme_res.dart';
+
+class AdsManagerScreen extends StatefulWidget {
+  const AdsManagerScreen({
+    super.key,
+    this.initialTabIndex = 0,
+  });
+
+  final int initialTabIndex;
+
+  @override
+  State<AdsManagerScreen> createState() => _AdsManagerScreenState();
+}
+
+class _AdsManagerScreenState extends State<AdsManagerScreen>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+
+    final User? user = SessionManager.instance.getUser();
+    const bool showAdminTab = false;
+
+    final tabs = <Tab>[
+      const Tab(text: 'Dashboard'),
+      const Tab(text: 'Campaigns'),
+      const Tab(text: 'Wallet'),
+      const Tab(text: 'Earnings'),
+      if (showAdminTab) const Tab(text: 'Admin'),
+    ];
+
+    final views = <Widget>[
+      const AdsDashboardTab(),
+      const AdsCampaignsTab(),
+      const AdsWalletTab(),
+      const AdsEarningsTab(),
+      if (showAdminTab) const AdsAdminTab(),
+    ];
+
+    final maxIndex = (tabs.length - 1).clamp(0, 999);
+
+    return DefaultTabController(
+      length: tabs.length,
+      initialIndex: widget.initialTabIndex.clamp(0, maxIndex),
+      child: Scaffold(
+        backgroundColor: scaffoldBackgroundColor(context),
+        appBar: AppBar(
+          backgroundColor: scaffoldBackgroundColor(context),
+          foregroundColor: textDarkGrey(context),
+          elevation: 0.6,
+          title: const Text(
+            'Ads Manager',
+            style: TextStyle(fontWeight: FontWeight.w800),
+          ),
+          bottom: TabBar(
+            isScrollable: true,
+            labelColor: textDarkGrey(context),
+            unselectedLabelColor:
+                textLightGrey(context).withValues(alpha: 0.9),
+            indicatorColor: themeAccentSolid(context),
+            dividerColor: textLightGrey(context).withValues(alpha: 0.15),
+            tabs: tabs,
+          ),
+        ),
+        body: TabBarView(children: views),
+      ),
+    );
+  }
+}
+R

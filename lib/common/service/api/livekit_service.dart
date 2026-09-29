@@ -1,0 +1,95 @@
+import 'package:shortzz/common/manager/logger.dart';
+import 'package:shortzz/common/service/api/api_service.dart';
+import 'package:shortzz/common/service/utils/web_service.dart';
+import 'package:shortzz/utilities/const_res.dart';
+
+class LiveKitService {
+  LiveKitService._();
+
+  static final LiveKitService instance = LiveKitService._();
+
+  Future<LiveKitTokenResponse?> generateToken({
+    required String roomName,
+    required String userIdentity,
+    required String userName,
+  }) async {
+    final urls = <String>[
+      WebService.setting.generateLiveKitToken,
+      '${apiURL}settings/livekit/generateToken',
+    ];
+
+    final paramVariants = <Map<String, dynamic>>[
+      {
+        'room_name': roomName,
+        'user_identity': userIdentity,
+        'user_name': userName,
+      },
+      {
+        'roomName': roomName,
+        'userIdentity': userIdentity,
+        'userName': userName,
+      },
+    ];
+
+    for (final url in urls) {
+      for (final params in paramVariants) {
+        try {
+          final raw = await ApiService.instance.call<Map<String, dynamic>>(
+            url: url,
+            param: params,
+            cancelAuthToken: false,
+          );
+
+          final parsed = _parse(raw);
+          if (parsed != null) return parsed;
+        } catch (e) {
+          Loggers.error('[LIVEKIT] generateToken failed url=$url err=$e');
+        }
+      }
+    }
+
+    Loggers.error('[LIVEKIT] generateToken failed on all fallbacks');
+    return null;
+  }
+
+  LiveKitTokenResponse? _parse(Map<String, dynamic> raw) {
+    if (raw['status'] == true) {
+      return LiveKitTokenResponse.fromJson(raw);
+    }
+    if (raw['success'] == true) {
+      return LiveKitTokenResponse.fromJson(raw);
+    }
+    if (raw['data'] is Map<String, dynamic>) {
+      final data = raw['data'] as Map<String, dynamic>;
+      final merged = <String, dynamic>{...data, ...raw};
+      return LiveKitTokenResponse.fromJson(merged);
+    }
+    return null;
+  }
+}
+
+class LiveKitTokenResponse {
+  final String token;
+  final String roomName;
+  final String livekitUrl;
+
+  LiveKitTokenResponse({
+    required this.token,
+    required this.roomName,
+    required this.livekitUrl,
+  });
+
+  factory LiveKitTokenResponse.fromJson(Map<String, dynamic> json) {
+    final token = (json['token'] ?? json['access_token'] ?? '').toString();
+    final roomName = (json['room_name'] ?? json['roomName'] ?? '').toString();
+    final livekitUrl =
+        (json['livekit_url'] ?? json['livekit_ws_url'] ?? json['livekitUrl'] ?? '')
+            .toString();
+
+    return LiveKitTokenResponse(
+      token: token,
+      roomName: roomName,
+      livekitUrl: livekitUrl,
+    );
+  }
+}

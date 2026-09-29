@@ -1,0 +1,389 @@
+import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:intl/intl.dart';
+import 'package:shortzz/common/extensions/common_extension.dart';
+import 'package:shortzz/common/widget/custom_app_bar.dart';
+import 'package:shortzz/common/widget/loader_widget.dart';
+import 'package:shortzz/common/widget/no_data_widget.dart';
+import 'package:shortzz/model/wallet/earnings_ledger_model.dart';
+import 'package:shortzz/model/wallet/earnings_summary_model.dart';
+import 'package:shortzz/screen/earnings_history_screen/earnings_history_screen_controller.dart';
+import 'package:shortzz/utilities/text_style_custom.dart';
+import 'package:shortzz/utilities/theme_res.dart';
+
+class EarningsHistoryScreen extends StatefulWidget {
+  const EarningsHistoryScreen({super.key});
+
+  @override
+  State<EarningsHistoryScreen> createState() => _EarningsHistoryScreenState();
+}
+
+class _EarningsHistoryScreenState extends State<EarningsHistoryScreen>
+    with SingleTickerProviderStateMixin {
+  late final TabController _tabController;
+  late final EarningsHistoryScreenController controller;
+
+  @override
+  void initState() {
+    super.initState();
+    controller = Get.put(EarningsHistoryScreenController());
+    _tabController = TabController(length: 4, vsync: this);
+    _tabController.addListener(() {
+      if (_tabController.indexIsChanging) return;
+      _handleTabIndex(_tabController.index);
+    });
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  void _handleTabIndex(int index) {
+    switch (index) {
+      case 0:
+        controller.onTypeChanged('all');
+        break;
+      case 1:
+        controller.onTypeChanged('paid_call');
+        break;
+      case 2:
+        controller.onTypeChanged('gift');
+        break;
+      case 3:
+        controller.onTypeChanged('withdrawal');
+        break;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Column(
+        children: [
+          const CustomAppBar(title: 'Earnings & History'),
+          Container(
+            color: bgLightGrey(context),
+            child: TabBar(
+              controller: _tabController,
+              isScrollable: true,
+              onTap: _handleTabIndex,
+              labelColor: textDarkGrey(context),
+              unselectedLabelColor:
+                  textLightGrey(context).withValues(alpha: 0.9),
+              indicatorColor: themeAccentSolid(context),
+              tabs: const [
+                Tab(text: 'All'),
+                Tab(text: 'Paid Calls'),
+                Tab(text: 'Gifts'),
+                Tab(text: 'Withdrawals'),
+              ],
+            ),
+          ),
+          Expanded(
+            child: TabBarView(
+              controller: _tabController,
+              children: const [
+                _LedgerTabView(),
+                _LedgerTabView(),
+                _LedgerTabView(),
+                _LedgerTabView(),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LedgerTabView extends StatelessWidget {
+  const _LedgerTabView();
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = Get.find<EarningsHistoryScreenController>();
+    return RefreshIndicator(
+      onRefresh: controller.refreshAll,
+      child: Obx(() {
+        final loadingSummary = controller.isLoadingSummary.value;
+        final loadingLedger = controller.isLoadingLedger.value;
+
+        return ListView(
+          padding: const EdgeInsets.only(bottom: 20),
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+              child: Text(
+                'Summary',
+                style: TextStyleCustom.outFitBold700(
+                  fontSize: 16,
+                  color: textDarkGrey(context),
+                ),
+              ),
+            ),
+            if (loadingSummary && controller.summaryData.value == null)
+              const SizedBox(height: 160, child: LoaderWidget())
+            else
+              _SummarySection(data: controller.summaryData.value),
+            const SizedBox(height: 4),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+              child: Text(
+                'History',
+                style: TextStyleCustom.outFitBold700(
+                  fontSize: 16,
+                  color: textDarkGrey(context),
+                ),
+              ),
+            ),
+            if (loadingLedger && controller.items.isEmpty)
+              const Padding(
+                padding: EdgeInsets.only(top: 30),
+                child: LoaderWidget(),
+              )
+            else
+              NoDataView(
+                showShow: !loadingLedger && controller.items.isEmpty,
+                title: 'No history',
+                description: 'No earnings history yet',
+                child: Column(
+                  children: [
+                    ...controller.items.map((e) => _LedgerTile(item: e)),
+                    if (controller.hasMore.value)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+                        child: loadingLedger
+                            ? const LoaderWidget()
+                            : SizedBox(
+                                width: double.infinity,
+                                height: 44,
+                                child: OutlinedButton.icon(
+                                  onPressed: controller.fetchLedger,
+                                  icon: const Icon(Icons.expand_more),
+                                  label: const Text('Load more'),
+                                ),
+                              ),
+                      )
+                  ],
+                ),
+              ),
+          ],
+        );
+      }),
+    );
+  }
+}
+
+class _SummarySection extends StatelessWidget {
+  const _SummarySection({required this.data});
+
+  final EarningsSummaryData? data;
+
+  @override
+  Widget build(BuildContext context) {
+    final totals = data?.totals;
+
+    Widget card({required String title, required String value}) {
+      return Expanded(
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: whitePure(context),
+            border: Border.all(
+              color: textLightGrey(context).withValues(alpha: 0.18),
+            ),
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.04),
+                blurRadius: 10,
+                offset: const Offset(0, 6),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: TextStyleCustom.outFitLight300(
+                  color: textLightGrey(context),
+                  fontSize: 12,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                value,
+                style: TextStyleCustom.outFitBold700(
+                  color: textDarkGrey(context),
+                  fontSize: 18,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final paidCalls = (totals?.paidCallsTokens ?? 0).toInt();
+    final gifts = (totals?.giftsTokens ?? 0).toInt();
+    final ads = (totals?.adsTokens ?? 0).toInt();
+    final tasks = (totals?.tasksTokens ?? 0).toInt();
+    final other = (totals?.otherTokens ?? 0).toInt();
+    final totalTokens = paidCalls + gifts + ads + tasks + other;
+
+    final credits = (totals?.creditsBalance ?? 0).toInt();
+    final coins = (totals?.coinsBalance ?? 0).toInt();
+    final usd = (totals?.dollarEstimated ?? 0).toDouble();
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              card(title: 'Total (Tokens)', value: totalTokens.numberFormat),
+              const SizedBox(width: 10),
+              card(
+                  title: 'Paid Calls (Tokens)',
+                  value: paidCalls.numberFormat),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              card(title: 'Gifts (Tokens)', value: gifts.numberFormat),
+              const SizedBox(width: 10),
+              card(title: 'Credits', value: credits.numberFormat),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              card(title: 'Coins', value: coins.numberFormat),
+              const SizedBox(width: 10),
+              card(title: 'Estimated (USD)', value: usd.currencyFormat),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LedgerTile extends StatelessWidget {
+  const _LedgerTile({required this.item});
+
+  final EarningsLedgerItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = (item.type ?? '').toLowerCase();
+
+    IconData icon;
+    Color iconColor;
+    String title;
+
+    if (t == 'paid_call') {
+      final callType = (item.meta?['call_type'] as num?)?.toInt();
+      final isAudio = callType == 1;
+      icon = isAudio ? Icons.call : Icons.videocam;
+      iconColor = Colors.green;
+      title = isAudio ? 'Paid Audio Call' : 'Paid Video Call';
+    } else if (t == 'gift') {
+      icon = Icons.card_giftcard;
+      iconColor = Colors.purple;
+      title = 'Gift Earning';
+    } else if (t == 'withdrawal') {
+      icon = Icons.account_balance_wallet;
+      iconColor = Colors.orange;
+      title = 'Withdrawal';
+    } else if (t == 'task') {
+      icon = Icons.task_alt;
+      iconColor = Colors.blue;
+      title = 'Task Earning';
+    } else {
+      icon = Icons.receipt_long;
+      iconColor = Colors.grey;
+      title = t.isEmpty ? 'Transaction' : t;
+    }
+
+    final tokens = (item.amountTokens ?? 0).toInt();
+    final coins = (item.amountCoins ?? 0).toInt();
+    final usd = (item.amountUsd ?? 0).toDouble();
+
+    String amountText;
+    if (tokens != 0) {
+      amountText = '+${tokens.numberFormat} Tokens';
+    } else if (coins != 0) {
+      amountText = '-${coins.numberFormat} Coins';
+    } else if (usd != 0) {
+      amountText = usd.currencyFormat;
+    } else {
+      amountText = '0';
+    }
+
+    final dt = item.createdAt;
+    final dateText =
+        dt == null ? '' : DateFormat('MMM d, h:mm a').format(dt.toLocal());
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: whitePure(context),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Container(
+            height: 40,
+            width: 40,
+            decoration: BoxDecoration(
+              color: iconColor.withValues(alpha: 0.12),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, color: iconColor, size: 20),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyleCustom.outFitBold700(
+                    fontSize: 15,
+                    color: textDarkGrey(context),
+                  ),
+                ),
+                if (dateText.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      dateText,
+                      style: TextStyleCustom.outFitLight300(
+                        fontSize: 12,
+                        color: textLightGrey(context),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          Text(
+            amountText,
+            style: TextStyleCustom.outFitSemiBold600(
+              fontSize: 13,
+              color: t == 'withdrawal'
+                  ? Colors.red
+                  : themeAccentSolid(context),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

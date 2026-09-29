@@ -1,0 +1,21 @@
+Äöfile:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_widget_from_html_core-0.17.2/lib/src/data/inherited_properties/decoration_color.dartÅ”part of '../../core_data.dart';
+
+TextStyle _prepareDecorationColor(
+  TextStyle style,
+  InheritedProperties resolved,
+) {
+  final property = resolved.get<TextStyleDecorationColor>();
+  if (property == null) {
+    return style;
+  }
+
+  final decorationColor = property.value.getValue(resolved);
+  if (decorationColor == null) {
+    return style;
+  }
+
+  return style.copyWith(
+    debugLabel: 'fwfh: text-decoration-color',
+    decorationColor: decorationColor,
+  );
+}

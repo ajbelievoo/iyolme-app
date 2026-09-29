@@ -1,0 +1,2898 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:audio_session/audio_session.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:get/get.dart';
+import 'package:just_audio/just_audio.dart';
+import 'package:livekit_client/livekit_client.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:archive/archive.dart';
+import 'package:shortzz/common/extensions/string_extension.dart';
+import 'package:shortzz/common/manager/logger.dart';
+import 'package:shortzz/common/manager/session_manager.dart';
+import 'package:shortzz/common/manager/active_call_manager.dart';
+import 'package:shortzz/common/service/api/livekit_service.dart';
+import 'package:shortzz/common/service/api/paid_call_service.dart';
+import 'package:shortzz/common/widget/black_gradient_shadow.dart';
+import 'package:shortzz/common/widget/custom_image.dart';
+import 'package:shortzz/common/widget/custom_border_round_icon.dart';
+import 'package:shortzz/common/widget/theme_blur_bg.dart';
+import 'package:shortzz/languages/languages_keys.dart';
+import 'package:shortzz/model/chat/chat_thread.dart';
+import 'package:shortzz/model/chat/message_data.dart' as chat;
+import 'package:shortzz/model/livestream/livestream.dart';
+import 'package:shortzz/model/livestream/app_user.dart';
+import 'package:shortzz/model/general/settings_model.dart';
+import 'package:shortzz/screen/live_stream/livestream_screen/livestream_screen_controller.dart';
+import 'package:shortzz/utilities/asset_res.dart';
+import 'package:shortzz/utilities/firebase_const.dart';
+import 'package:shortzz/utilities/text_style_custom.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
+
+import 'package:shortzz/screen/dashboard_screen/dashboard_screen_controller.dart';
+
+class CallScreen extends StatefulWidget {
+  final Livestream livestream;
+  final String url;
+  final String token;
+  final bool isAudio;
+  final bool reuseActiveSession;
+
+  const CallScreen({
+    super.key,
+    required this.livestream,
+    required this.url,
+    required this.token,
+    required this.isAudio,
+    this.reuseActiveSession = false,
+  });
+
+  @override
+  State<CallScreen> createState() => _CallScreenState();
+}
+
+class _CallScreenState extends State<CallScreen> {
+  late final Room _room;
+  bool _connecting = false;
+  bool _reconnecting = false;
+  int _reconnectAttempt = 0;
+  Timer? _reconnectTimer;
+  String? _livekitUrl;
+  String? _livekitToken;
+  bool _camEnabled = true;
+  bool _micEnabled = true;
+  bool _speakerOn = false;
+  bool _holdEnabled = false;
+  bool _preHoldMicEnabled = true;
+  bool _preHoldCamEnabled = true;
+  bool _remoteHold = false;
+  String? _error;
+  int _connectAttempt = 0;
+  String? _cameraDeviceId;
+  final AudioPlayer _ringPlayer = AudioPlayer();
+  String? _pendingEndReason;
+
+  late final LivestreamScreenController _controller;
+  Future<void> Function()? _unsubEvents;
+
+  String? _remoteParticipantIdentity;
+  VideoTrack? _remoteVideoTrack;
+  ConnectionQuality? _connectionQuality;
+  bool _screenShareEnabled = false;
+  bool _noiseSuppressionEnabled = true;
+  bool _handRaised = false;
+  final Map<String, bool> _raisedHands = {};
+  bool _isGroupCall = false;
+  final double _beautyLevel = 0.0;
+  String _videoFilterName = 'None';
+  List<double>? _videoFilterMatrix;
+  int _arTabIndex = 0;
+  String _selectedEffectName = 'None';
+  String? _effectOverlayUrl;
+  Color? _backgroundTint;
+  Directory? _deepArEffectsBaseDir;
+
+  // DeepAR Beauty Params
+  final double _daSmooth = 0.0;
+  final double _daEyeSize = 0.0;
+  final double _daFaceShape = 0.0;
+  final double _daNoseSize = 0.0;
+  final double _daChinSize = 0.0;
+  final double _daMouthPos = 0.0;
+  final double _daLips = 0.0;
+  final double _daBlush = 0.0;
+  final double _daFoundation = 0.0;
+  final double _daEyeshadow = 0.0;
+  final double _daEyelashes = 0.0;
+  final double _daEyebrows = 0.0;
+  final double _daHairStrength = 0.0;
+  final Color _daHairColor = Colors.black;
+  String? _currentDeepArEffectPath;
+  Timer? _deepArDebounce;
+
+  Future<void> _pushDeepArUpdate() async {
+    final s = SessionManager.instance.getSettings();
+    final token =
+        (GetPlatform.isIOS ? s?.deeparIOSKey : s?.deeparAndroidKey) ?? '';
+    final track = _localCameraMediaTrack();
+    if (track == null) return;
+    if (token.trim().isEmpty) return;
+
+    try {
+      await Helper.setExternalVideoProcessingProvider(track, 'deepar', params: {
+        'token': token.trim(),
+        'effectPath': _currentDeepArEffectPath ?? '',
+        'mirror': false,
+        'smooth': _controller.arBeautySmooth.value,
+        'eyeSize': _controller.arFaceEyeSize.value,
+        'faceShape': _controller.arFaceShape.value,
+        'noseSize': _controller.arFaceNoseSize.value,
+        'chinSize': _controller.arFaceChinSize.value,
+        'mouthPos': _controller.arFaceMouthPos.value,
+        'makeup': {
+          'lips': _controller.arMakeupLipsColor.value,
+          'blush': _controller.arMakeupBlush.value,
+          'foundation': _controller.arMakeupFoundation.value,
+          'eyeshadow': _controller.arMakeupEyeshadow.value,
+          'eyelashes': _controller.arMakeupEyelashes.value,
+          'eyebrows': _controller.arMakeupEyebrows.value,
+          'hair': {
+            'strength': _controller.arHairStrength.value,
+            'color': [
+              _controller.arHairColor.value.red / 255.0,
+              _controller.arHairColor.value.green / 255.0,
+              _controller.arHairColor.value.blue / 255.0
+            ],
+          }
+        },
+      });
+      await Helper.setExternalVideoProcessingEnabled(track, true);
+    } catch (e) {
+      Loggers.error('[CALL] push DeepAR update failed: $e');
+    }
+  }
+
+  AppUser? _peerUser() {
+    final myId = SessionManager.instance.getUser()?.id;
+    if (myId == null) return null;
+    if (_callerId != null && myId == _callerId) return _receiverUser;
+    if (_receiverId != null && myId == _receiverId) return _callerUser;
+    return null;
+  }
+
+  VideoTrack? _localCameraTrack() {
+    try {
+      final lp = _room.localParticipant;
+      if (lp == null) return null;
+      final pub = lp.videoTrackPublications.firstWhereOrNull(
+          (p) => p.source == TrackSource.camera && p.track != null);
+      final t = pub?.track;
+      if (t is VideoTrack) return t;
+    } catch (_) {}
+    return null;
+  }
+
+  MediaStreamTrack? _localCameraMediaTrack() =>
+      _localCameraTrack()?.mediaStreamTrack;
+
+  Future<void> _disableExternalArProcessing() async {
+    final track = _localCameraMediaTrack();
+    if (track == null) return;
+    try {
+      await Helper.setExternalVideoProcessingEnabled(track, false);
+    } catch (_) {}
+  }
+
+  Future<Directory> _getDeepArEffectsBaseDir() async {
+    if (_deepArEffectsBaseDir != null) return _deepArEffectsBaseDir!;
+    final support = await getApplicationSupportDirectory();
+    final base = Directory(p.join(support.path, 'deepar_effects'));
+    if (!await base.exists()) {
+      await base.create(recursive: true);
+    }
+    _deepArEffectsBaseDir = base;
+    return base;
+  }
+
+  Future<void> _unzipToDir(File zipFile, Directory targetDir) async {
+    final bytes = await zipFile.readAsBytes();
+    final archive = ZipDecoder().decodeBytes(bytes, verify: true);
+    for (final entry in archive) {
+      final name = entry.name;
+      if (name.isEmpty) continue;
+      if (p.isAbsolute(name)) continue;
+      final normalized = p.normalize(name);
+      if (normalized.startsWith('..')) continue;
+      final outPath = p.join(targetDir.path, normalized);
+      if (entry.isFile) {
+        final outFile = File(outPath);
+        await outFile.parent.create(recursive: true);
+        final data = entry.content as List<int>;
+        await outFile.writeAsBytes(data, flush: true);
+      } else {
+        await Directory(outPath).create(recursive: true);
+      }
+    }
+  }
+
+  Future<String?> _resolveDeepArEffectPath(DeepARFilters effect) async {
+    final url = (effect.filterFile?.trim() ?? '').isNotEmpty
+        ? effect.filterFile!.trim().addBaseURL()
+        : '';
+    if (url.isEmpty) return null;
+    try {
+      final downloadedFile = await DefaultCacheManager()
+          .getSingleFile(url)
+          .timeout(const Duration(seconds: 15));
+      final filePath = downloadedFile.path;
+      final lower = filePath.toLowerCase();
+      if (!lower.endsWith('.zip')) return filePath;
+
+      final base = await _getDeepArEffectsBaseDir();
+      final safeName =
+          '${effect.id}_${p.basenameWithoutExtension(filePath)}'.replaceAll(
+        RegExp(r'[^a-zA-Z0-9_\\-\\.]'),
+        '_',
+      );
+      final targetDir = Directory(p.join(base.path, safeName));
+      if (await targetDir.exists()) {
+        final config = File(p.join(targetDir.path, 'config.json'));
+        if (await config.exists()) {
+          return targetDir.path;
+        }
+      }
+      try {
+        if (await targetDir.exists()) {
+          await targetDir.delete(recursive: true);
+        }
+        await targetDir.create(recursive: true);
+        await _unzipToDir(downloadedFile, targetDir);
+        return targetDir.path;
+      } catch (e) {
+        Loggers.error('[DeepAR] unzip failed: $e');
+        return filePath;
+      }
+    } catch (e) {
+      Loggers.error('[DeepAR] download failed: $e');
+      return null;
+    }
+  }
+
+  Future<void> _enableDeepArArEffect(String effectPath) async {
+    _currentDeepArEffectPath = effectPath;
+    await _pushDeepArUpdate();
+  }
+
+  Timer? _callTimeoutTimer;
+  DateTime? _startTime;
+  Timer? _durationTimer;
+  StreamSubscription<DocumentSnapshot>? _callStatusSub;
+  bool _closing = false;
+  int? _callerId;
+  int? _receiverId;
+  AppUser? _callerUser;
+  AppUser? _receiverUser;
+  DateTime? _acceptedAt;
+  String? _conversationId;
+  int? _chatPeerId;
+  List<MediaDeviceInfo> _audioOutputs = const [];
+  String? _selectedAudioOutputId;
+  String? _callControllerTag;
+  Timer? _remoteLeftTimer;
+  bool _isPaidCall = false;
+  int? _paidCostPerMinute;
+  double? _paidCommissionPercent;
+  int? _paidNetPerMinute;
+  int? _paidTotalCost;
+  int? _paidCommission;
+  int? _paidEarning;
+
+  void _safePop() {
+    if (!mounted) return;
+    Navigator.of(context).maybePop();
+  }
+
+  Future<void> _applyMicEnabled(bool enabled) async {
+    ActiveCallManager.instance.setMicEnabled(enabled);
+    if (mounted) setState(() => _micEnabled = enabled);
+    try {
+      await _room.localParticipant?.setMicrophoneEnabled(enabled);
+    } catch (e) {
+      Loggers.error('[CALL] setMicrophoneEnabled failed: $e');
+    }
+  }
+
+  Future<void> _toggleRaiseHand() async {
+    _handRaised = !_handRaised;
+    if (mounted) setState(() {});
+    try {
+      final payload = jsonEncode({'raised': _handRaised});
+      await _room.localParticipant?.publishData(
+        utf8.encode(payload),
+        reliable: true,
+        topic: 'raise_hand',
+      );
+    } catch (e) {
+      Loggers.error('[CALL] raise hand send failed: $e');
+    }
+  }
+
+  Future<void> _toggleScreenShare() async {
+    final enable = !_screenShareEnabled;
+    try {
+      await _room.localParticipant?.setScreenShareEnabled(
+        enable,
+        screenShareCaptureOptions: const ScreenShareCaptureOptions(),
+      );
+      _screenShareEnabled = enable;
+      if (mounted) setState(() {});
+    } catch (e) {
+      Loggers.error('[CALL] screen share failed: $e');
+      if (mounted) {
+        Get.snackbar('Screen Share', 'Unable to start screen sharing',
+            snackPosition: SnackPosition.BOTTOM,
+            backgroundColor: Colors.red,
+            colorText: Colors.white);
+      }
+    }
+  }
+
+  Future<void> _toggleNoiseSuppression() async {
+    final enable = !_noiseSuppressionEnabled;
+    _noiseSuppressionEnabled = enable;
+    if (mounted) setState(() {});
+    try {
+      if (_room.localParticipant == null) return;
+      if (!_micEnabled) return;
+      await _room.localParticipant!.setMicrophoneEnabled(false);
+      await _room.localParticipant!.setMicrophoneEnabled(
+        true,
+        audioCaptureOptions: AudioCaptureOptions(
+          noiseSuppression: enable,
+          echoCancellation: true,
+          autoGainControl: true,
+        ),
+      );
+    } catch (e) {
+      Loggers.error('[CALL] noise suppression toggle failed: $e');
+    }
+  }
+
+  Future<void> _inviteParticipant(AppUser user) async {
+    final roomId = widget.livestream.roomID;
+    final myId = SessionManager.instance.getUser()?.id;
+    if (roomId == null || myId == null) return;
+    final uid = user.userId;
+    if (uid == null) return;
+    try {
+      await FirebaseFirestore.instance.collection('calls').doc(roomId).set({
+        'isGroup': true,
+        'participants': FieldValue.arrayUnion([uid]),
+        'inviteStatus.$uid': 'ringing',
+        'invitedAtMap.$uid': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      if (mounted) {
+        Get.snackbar('Invite Sent', 'Calling ${user.username ?? 'user'}',
+            snackPosition: SnackPosition.BOTTOM);
+      }
+    } catch (e) {
+      Loggers.error('[CALL] invite participant failed: $e');
+      if (mounted) {
+        Get.snackbar('Error', 'Failed to invite participant',
+            snackPosition: SnackPosition.BOTTOM,
+            backgroundColor: Colors.red,
+            colorText: Colors.white);
+      }
+    }
+  }
+
+  void _openAddParticipantSheet() {
+    final myId = SessionManager.instance.getUser()?.id;
+    if (myId == null) return;
+    Get.bottomSheet(
+      Container(
+        color: Colors.white,
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text('Add participant',
+                          style: TextStyleCustom.outFitBold700(fontSize: 18)),
+                    ),
+                    IconButton(
+                      onPressed: () => Get.back(),
+                      icon: const Icon(Icons.close),
+                    )
+                  ],
+                ),
+              ),
+              SizedBox(
+                height: 420,
+                child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                  stream: FirebaseFirestore.instance
+                      .collection(FirebaseConst.users)
+                      .doc(myId.toString())
+                      .collection(FirebaseConst.usersList)
+                      .where(FirebaseConst.isDeleted, isEqualTo: false)
+                      .where(FirebaseConst.chatType,
+                          isEqualTo: ChatType.approved.value)
+                      .orderBy(FirebaseConst.id, descending: true)
+                      .limit(50)
+                      .snapshots(),
+                  builder: (context, snapshot) {
+                    final docs = snapshot.data?.docs ?? const [];
+                    if (!snapshot.hasData) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    if (docs.isEmpty) {
+                      return const Center(child: Text('No users'));
+                    }
+                    return ListView.builder(
+                      itemCount: docs.length,
+                      itemBuilder: (context, index) {
+                        final thread = ChatThread.fromJson(docs[index].data());
+                        final user = thread.chatUser;
+                        final uid = thread.userId;
+                        final title = user?.username ?? 'User ${uid ?? ''}';
+                        return ListTile(
+                          leading: user?.profile != null
+                              ? CustomImage(
+                                  size: const Size(42, 42),
+                                  image: (user?.profile ?? '').addBaseURL(),
+                                  fit: BoxFit.cover,
+                                  radius: 21,
+                                )
+                              : const CircleAvatar(child: Icon(Icons.person)),
+                          title: Text(title),
+                          onTap: () async {
+                            if (uid == null) return;
+                            final u = user ??
+                                AppUser(
+                                  userId: uid,
+                                  username: title,
+                                );
+                            Get.back();
+                            await _inviteParticipant(u);
+                          },
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+    );
+  }
+
+  void _setVideoFilter(String name, List<double>? matrix) {
+    _videoFilterName = name;
+    _videoFilterMatrix = matrix;
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _openBeautySheet() async {
+    final settings = SessionManager.instance.getSettings();
+    final deepEffects = settings?.deepARFilters ?? const <DeepARFilters>[];
+    final luts = settings?.luts ?? const <LutItem>[];
+
+    if (!_camEnabled) {
+      await _applyCameraEnabled(true);
+    }
+    if (mounted) setState(() {});
+
+    await Get.bottomSheet(
+      Container(
+        color: Colors.black.withValues(alpha: 0.85),
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
+        child: SafeArea(
+          top: false,
+          child: StatefulBuilder(
+            builder: (context, modalSetState) {
+              void update(VoidCallback fn) {
+                modalSetState(fn);
+                if (mounted) setState(() {});
+              }
+
+              void debounceUpdate() {
+                _deepArDebounce?.cancel();
+                _deepArDebounce =
+                    Timer(const Duration(milliseconds: 150), _pushDeepArUpdate);
+              }
+
+              List<double> lutFallbackMatrix(String seed) {
+                final h = seed.hashCode;
+                final r = 1.0 + (((h >> 2) % 7) - 3) * 0.04;
+                final g = 1.0 + (((h >> 5) % 7) - 3) * 0.04;
+                final b = 1.0 + (((h >> 8) % 7) - 3) * 0.04;
+                final br = (((h >> 11) % 9) - 4) * 3.0;
+                return <double>[
+                  r,
+                  0.0,
+                  0.0,
+                  0.0,
+                  br,
+                  0.0,
+                  g,
+                  0.0,
+                  0.0,
+                  br,
+                  0.0,
+                  0.0,
+                  b,
+                  0.0,
+                  br,
+                  0.0,
+                  0.0,
+                  0.0,
+                  1.0,
+                  0.0,
+                ];
+              }
+
+              final filterPresets = <Map<String, dynamic>>[
+                {'name': 'None', 'matrix': null},
+                {
+                  'name': 'B&W',
+                  'matrix': const <double>[
+                    0.2126,
+                    0.7152,
+                    0.0722,
+                    0.0,
+                    0.0,
+                    0.2126,
+                    0.7152,
+                    0.0722,
+                    0.0,
+                    0.0,
+                    0.2126,
+                    0.7152,
+                    0.0722,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                  ]
+                },
+                {
+                  'name': 'Sepia',
+                  'matrix': const <double>[
+                    0.393,
+                    0.769,
+                    0.189,
+                    0.0,
+                    0.0,
+                    0.349,
+                    0.686,
+                    0.168,
+                    0.0,
+                    0.0,
+                    0.272,
+                    0.534,
+                    0.131,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                  ]
+                },
+                {
+                  'name': 'Cool',
+                  'matrix': const <double>[
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.12,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                  ]
+                },
+                {
+                  'name': 'Warm',
+                  'matrix': const <double>[
+                    1.12,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.96,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                  ]
+                },
+              ];
+
+              const tabs = ['Effects', 'Filters', 'Beauty', 'Makeup', 'Hair'];
+              final hairColors = [
+                Colors.black,
+                Colors.brown,
+                Colors.red,
+                Colors.amber,
+                Colors.blue,
+                Colors.purple,
+                Colors.green,
+                Colors.grey,
+              ];
+
+              Widget buildSlider(String label, RxDouble rxValue,
+                  {double min = 0.0, double max = 1.0}) {
+                return Padding(
+                  padding:
+                      const EdgeInsets.symmetric(vertical: 8, horizontal: 20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            label,
+                            style: TextStyleCustom.outFitMedium500(
+                                fontSize: 14, color: Colors.white),
+                          ),
+                          const Spacer(),
+                          Obx(() => Text('${(rxValue.value * 100).round()}',
+                              style: TextStyleCustom.outFitRegular400(
+                                  fontSize: 14, color: Colors.white70))),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      SizedBox(
+                        height: 24,
+                        child: SliderTheme(
+                          data: SliderTheme.of(context).copyWith(
+                            trackHeight: 4,
+                            activeTrackColor: Colors.tealAccent,
+                            inactiveTrackColor: Colors.white12,
+                            thumbColor: Colors.white,
+                            thumbShape: const RoundSliderThumbShape(
+                                enabledThumbRadius: 8),
+                            overlayShape: const RoundSliderOverlayShape(
+                                overlayRadius: 16),
+                          ),
+                          child: Obx(() => Slider(
+                                value: rxValue.value,
+                                min: min,
+                                max: max,
+                                onChanged: (v) {
+                                  rxValue.value = v;
+                                  debounceUpdate();
+                                },
+                              )),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }
+
+              Widget buildContent() {
+                if (_arTabIndex == 0) {
+                  // Effects (Masks)
+                  return SizedBox(
+                    height: 100,
+                    child: ListView.separated(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      scrollDirection: Axis.horizontal,
+                      itemCount:
+                          deepEffects.isEmpty ? 1 : deepEffects.length + 1,
+                      separatorBuilder: (_, __) => const SizedBox(width: 12),
+                      itemBuilder: (context, index) {
+                        if (index == 0) {
+                          final selected = _selectedEffectName == 'None';
+                          return _FxCircle(
+                            selected: selected,
+                            label: 'None',
+                            onTap: () async {
+                              update(() {
+                                _selectedEffectName = 'None';
+                                _effectOverlayUrl = null;
+                              });
+                              await _enableDeepArArEffect('');
+                            },
+                          );
+                        }
+                        final e = deepEffects[index - 1];
+                        final title = e.title?.toString().trim() ?? 'Effect';
+                        final raw = e.image?.toString() ?? '';
+                        final img = raw.isNotEmpty ? raw.addBaseURL() : '';
+                        final selected = _selectedEffectName == title;
+                        return _FxCircle(
+                          selected: selected,
+                          label: title,
+                          imageUrl: img.isEmpty ? null : img,
+                          onTap: () async {
+                            update(() {
+                              _selectedEffectName = title;
+                            });
+                            final path = await _resolveDeepArEffectPath(e);
+                            if (path == null || path.trim().isEmpty) return;
+                            await _enableDeepArArEffect(path);
+                          },
+                        );
+                      },
+                    ),
+                  );
+                } else if (_arTabIndex == 1) {
+                  // Filters (LUTs)
+                  return SizedBox(
+                    height: 100,
+                    child: ListView.separated(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      scrollDirection: Axis.horizontal,
+                      itemCount: luts.isEmpty ? 1 : luts.length + 1,
+                      separatorBuilder: (_, __) => const SizedBox(width: 12),
+                      itemBuilder: (context, index) {
+                        if (index == 0) {
+                          return Obx(() {
+                            final selected =
+                                _controller.arFilterPreset.value == 'none';
+                            return _FxCircle(
+                              selected: selected,
+                              label: 'None',
+                              onTap: () async {
+                                _controller.arFilterPreset.value = 'none';
+                                debounceUpdate();
+                              },
+                            );
+                          });
+                        }
+                        final lut = luts[index - 1];
+                        final name = (lut.title ?? 'LUT').toString();
+                        final raw = lut.image?.toString() ?? '';
+                        final img = raw.isNotEmpty ? raw.addBaseURL() : '';
+                        final file = lut.file?.toString() ?? '';
+                        return Obx(() {
+                          final selected = _controller.arFilterPreset.value ==
+                                  'lut' &&
+                              _controller.arFilterLutAssetPath.value == file;
+                          return _FxCircle(
+                            selected: selected,
+                            label: name,
+                            imageUrl: img.isEmpty ? null : img,
+                            onTap: () async {
+                              _controller.arFilterPreset.value = 'lut';
+                              _controller.arFilterLutAssetPath.value = file;
+                              debounceUpdate();
+                            },
+                          );
+                        });
+                      },
+                    ),
+                  );
+                } else if (_arTabIndex == 2) {
+                  // Beauty
+                  return SizedBox(
+                    height: 240,
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.only(bottom: 20),
+                      child: Column(
+                        children: [
+                          buildSlider('Smooth', _controller.arBeautySmooth),
+                          buildSlider('Brighten', _controller.arBeautyBrighten),
+                          buildSlider('Sharpen', _controller.arBeautySharpen),
+                          buildSlider('Glow', _controller.arBeautyGlow),
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+                            child: Text('Face Morphing',
+                                style: TextStyleCustom.outFitSemiBold600(
+                                    color: Colors.white70, fontSize: 12)),
+                          ),
+                          buildSlider('Eye Size', _controller.arFaceEyeSize),
+                          buildSlider('Face Shape', _controller.arFaceShape),
+                          buildSlider('Nose Size', _controller.arFaceNoseSize),
+                          buildSlider('Chin Size', _controller.arFaceChinSize),
+                          buildSlider('Mouth Pos', _controller.arFaceMouthPos),
+                        ],
+                      ),
+                    ),
+                  );
+                } else if (_arTabIndex == 3) {
+                  // Makeup
+                  return SizedBox(
+                    height: 240,
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.only(bottom: 20),
+                      child: Column(
+                        children: [
+                          buildSlider(
+                              'Lipstick', _controller.arMakeupLipsColor),
+                          buildSlider('Blush', _controller.arMakeupBlush),
+                          buildSlider(
+                              'Foundation', _controller.arMakeupFoundation),
+                          buildSlider(
+                              'Eyeshadow', _controller.arMakeupEyeshadow),
+                          buildSlider(
+                              'Eyelashes', _controller.arMakeupEyelashes),
+                          buildSlider('Eyebrows', _controller.arMakeupEyebrows),
+                          const Divider(color: Colors.white12, height: 30),
+                          buildSlider(
+                              'Skin Smooth', _controller.arMakeupSkinSmooth),
+                          buildSlider(
+                              'Face Tone', _controller.arMakeupFaceTone),
+                          buildSlider(
+                              'Highlight', _controller.arMakeupHighlight),
+                          buildSlider(
+                              'Eye Bright', _controller.arMakeupEyeBrightness),
+                          buildSlider(
+                              'Contour', _controller.arMakeupSoftContour),
+                        ],
+                      ),
+                    ),
+                  );
+                } else if (_arTabIndex == 4) {
+                  // Hair
+                  return Column(
+                    children: [
+                      buildSlider(
+                          'Hair Color Strength', _controller.arHairStrength),
+                      const SizedBox(height: 10),
+                      SizedBox(
+                        height: 50,
+                        child: ListView.separated(
+                          scrollDirection: Axis.horizontal,
+                          itemCount: hairColors.length,
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(width: 12),
+                          itemBuilder: (context, index) {
+                            final color = hairColors[index];
+                            return Obx(() {
+                              final selected =
+                                  _controller.arHairColor.value.toARGB32() ==
+                                      color.toARGB32();
+                              return GestureDetector(
+                                onTap: () {
+                                  _controller.arHairColor.value = color;
+                                  debounceUpdate();
+                                },
+                                child: Container(
+                                  width: 40,
+                                  height: 40,
+                                  decoration: BoxDecoration(
+                                    color: color,
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: selected
+                                          ? Colors.white
+                                          : Colors.white24,
+                                      width: 2,
+                                    ),
+                                  ),
+                                  child: selected
+                                      ? const Icon(Icons.check,
+                                          color: Colors.white, size: 20)
+                                      : null,
+                                ),
+                              );
+                            });
+                          },
+                        ),
+                      ),
+                    ],
+                  );
+                }
+                return const SizedBox();
+              }
+
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Row(
+                      children: [
+                        Text('Beauty & Effects',
+                            style: TextStyleCustom.outFitBold700(
+                                fontSize: 18, color: Colors.white)),
+                        const Spacer(),
+                        InkWell(
+                          onTap: () => Get.back(),
+                          child: Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: const BoxDecoration(
+                              color: Colors.white10,
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(Icons.close,
+                                color: Colors.white, size: 20),
+                          ),
+                        )
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  // Tabs
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Row(
+                      children: List.generate(tabs.length, (index) {
+                        return Padding(
+                          padding: const EdgeInsets.only(right: 12),
+                          child: _FxTabButton(
+                            label: tabs[index],
+                            selected: _arTabIndex == index,
+                            onTap: () => update(() => _arTabIndex = index),
+                          ),
+                        );
+                      }),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  // Content
+                  buildContent(),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+      backgroundColor: Colors.transparent,
+      isDismissible: true,
+    );
+  }
+
+  Future<void> _applyCameraEnabled(bool enabled) async {
+    if (mounted) setState(() => _camEnabled = enabled);
+    try {
+      await _room.localParticipant?.setCameraEnabled(enabled);
+    } catch (e) {
+      Loggers.error('[CALL] setCameraEnabled failed: $e');
+    }
+  }
+
+  void _openCallMenu() {
+    Get.bottomSheet(
+      Container(
+        color: Colors.white,
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text('Call options',
+                          style: TextStyleCustom.outFitBold700(fontSize: 18)),
+                    ),
+                    IconButton(
+                      onPressed: () => Get.back(),
+                      icon: const Icon(Icons.close),
+                    )
+                  ],
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.person_add),
+                title: const Text('Add participant'),
+                onTap: () {
+                  Get.back();
+                  _openAddParticipantSheet();
+                },
+              ),
+              ListTile(
+                leading: Icon(
+                    _handRaised ? Icons.back_hand : Icons.back_hand_outlined),
+                title: Text(_handRaised ? 'Lower hand' : 'Raise hand'),
+                onTap: () async {
+                  Get.back();
+                  await _toggleRaiseHand();
+                },
+              ),
+              ListTile(
+                leading:
+                    Icon(_holdEnabled ? Icons.play_arrow : Icons.pause_circle),
+                title: Text(_holdEnabled ? 'Unhold' : 'Hold'),
+                onTap: () async {
+                  Get.back();
+                  await _toggleHold();
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.chat_bubble_outline),
+                title: const Text('Chat'),
+                onTap: () {
+                  Get.back();
+                  _openInCallChat();
+                },
+              ),
+              if (!widget.isAudio)
+                ListTile(
+                  leading: Icon(_screenShareEnabled
+                      ? Icons.stop_screen_share
+                      : Icons.screen_share),
+                  title: Text(_screenShareEnabled
+                      ? 'Stop screen share'
+                      : 'Screen share'),
+                  onTap: () async {
+                    Get.back();
+                    await _toggleScreenShare();
+                  },
+                ),
+              ListTile(
+                leading: Icon(_noiseSuppressionEnabled
+                    ? Icons.noise_aware
+                    : Icons.noise_control_off),
+                title: Text(_noiseSuppressionEnabled
+                    ? 'Noise suppression: On'
+                    : 'Noise suppression: Off'),
+                onTap: () async {
+                  Get.back();
+                  await _toggleNoiseSuppression();
+                },
+              ),
+              if (!widget.isAudio)
+                ListTile(
+                  leading: const Icon(Icons.auto_fix_high),
+                  title: const Text('Filters & Beauty'),
+                  onTap: () {
+                    Get.back();
+                    unawaited(_controller.openBeautySheet());
+                  },
+                ),
+              ListTile(
+                leading: const Icon(Icons.volume_up),
+                title: const Text('Audio output'),
+                onTap: () async {
+                  Get.back();
+                  _openAudioRouteSheet();
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+    );
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    final callId = widget.livestream.roomID;
+    final mgr = ActiveCallManager.instance;
+    if (widget.reuseActiveSession &&
+        callId != null &&
+        mgr.isActive &&
+        mgr.callId == callId &&
+        mgr.room != null) {
+      _room = mgr.room!;
+    } else {
+      _room = Room(
+        roomOptions: RoomOptions(
+          defaultAudioCaptureOptions: AudioCaptureOptions(
+            noiseSuppression: _noiseSuppressionEnabled,
+            echoCancellation: true,
+            autoGainControl: true,
+          ),
+        ),
+      );
+    }
+
+    DashboardScreenController.isCallActive = true;
+    DashboardScreenController.currentCallId = widget.livestream.roomID;
+
+    _camEnabled = !widget.isAudio;
+    _micEnabled = widget.reuseActiveSession ? mgr.micEnabled : true;
+    _speakerOn =
+        !widget.isAudio; // Default speaker on for video calls, OFF for audio
+    if (widget.reuseActiveSession && mgr.startedAt != null) {
+      _startTime = mgr.startedAt;
+      _resumeDurationTicker();
+    }
+
+    _callControllerTag =
+        callId != null ? 'call_controller_$callId' : 'call_controller';
+    if (Get.isRegistered<LivestreamScreenController>(tag: _callControllerTag)) {
+      _controller =
+          Get.find<LivestreamScreenController>(tag: _callControllerTag);
+    } else {
+      _controller = Get.put(
+        LivestreamScreenController(
+          widget.livestream.obs,
+          true,
+          bootstrapProvider: false,
+          isCall: true,
+        ),
+        tag: _callControllerTag,
+        permanent: true,
+      );
+    }
+
+    _wireControllerCallbacks();
+    _initAudio();
+    _listenToCallDoc();
+    _refreshAudioOutputs();
+
+    _connecting = widget.token.isNotEmpty;
+    if (widget.token.isNotEmpty) {
+      _livekitUrl = widget.url;
+      _livekitToken = widget.token;
+    }
+
+    if (callId != null && callId.isNotEmpty) {
+      mgr.bindSession(
+        room: _room,
+        livestream: widget.livestream,
+        callId: callId,
+        isAudio: widget.isAudio,
+        url: _livekitUrl ?? widget.url,
+        token: _livekitToken ?? widget.token,
+      );
+      mgr.onOpenCall = () {
+        final ls = mgr.livestream ?? widget.livestream;
+        Get.to(() => CallScreen(
+              livestream: ls,
+              url: mgr.url ?? '',
+              token: mgr.token ?? '',
+              isAudio: mgr.isAudio,
+              reuseActiveSession: true,
+            ));
+      };
+      mgr.onCleanup = () {
+        final tag = _callControllerTag;
+        if (tag != null &&
+            Get.isRegistered<LivestreamScreenController>(tag: tag)) {
+          Get.delete<LivestreamScreenController>(tag: tag, force: true);
+        }
+      };
+    }
+
+    // Only connect if we have a token (Accepted Call)
+    // If waiting (Caller), we listen to status
+    if (widget.token.isNotEmpty) {
+      _connect();
+    } else {
+      // We are waiting.
+      // For Caller: Show Ringing and listen for accept.
+      _listenToCallStatus();
+      _startCallTimeout();
+    }
+  }
+
+  void _startCallTimeout() {
+    _callTimeoutTimer = Timer(const Duration(seconds: 30), () {
+      if (_remoteParticipantIdentity == null && mounted) {
+        _handleDisconnect(); // Properly disconnect and update status
+        if (mounted) {
+          Get.snackbar('No Answer', 'User did not answer',
+              snackPosition: SnackPosition.BOTTOM);
+        }
+      }
+    });
+  }
+
+  Future<void> _handleDisconnect() async {
+    final roomId = widget.livestream.roomID;
+
+    // Stop timers immediately
+    _callTimeoutTimer?.cancel();
+    _durationTimer?.cancel();
+    await _ringPlayer.stop();
+
+    if (roomId != null && roomId.startsWith('call_')) {
+      await _updateCallOnLocalEnd(roomId, endReason: _pendingEndReason);
+    }
+    _pendingEndReason = null;
+
+    try {
+      await ActiveCallManager.instance.endSession(updateFirestore: false);
+    } catch (e) {
+      Loggers.error("Error disconnecting room: $e");
+    }
+
+    // Explicitly navigate back if mounted
+    _safePop();
+  }
+
+  void _listenToCallDoc() {
+    final roomId = widget.livestream.roomID;
+    if (roomId == null || !roomId.startsWith('call_')) return;
+
+    _callStatusSub?.cancel();
+    _callStatusSub = FirebaseFirestore.instance
+        .collection('calls')
+        .doc(roomId)
+        .snapshots()
+        .listen((snapshot) async {
+      if (!snapshot.exists) return;
+      final data = snapshot.data();
+      if (data == null) return;
+
+      final status = data['status'];
+      final callerIdRaw = data['callerId'];
+      final receiverIdRaw = data['receiverId'];
+      if (callerIdRaw is num) _callerId ??= callerIdRaw.toInt();
+      if (receiverIdRaw is num) _receiverId ??= receiverIdRaw.toInt();
+      final callerRaw = data['caller'];
+      if (callerRaw is Map) {
+        _callerUser ??= AppUser.fromJson(Map<String, dynamic>.from(callerRaw));
+      }
+      final receiverRaw = data['receiver'];
+      if (receiverRaw is Map) {
+        _receiverUser ??=
+            AppUser.fromJson(Map<String, dynamic>.from(receiverRaw));
+      }
+      final conversationIdRaw = data['conversationId'];
+      if (conversationIdRaw is String && conversationIdRaw.isNotEmpty) {
+        _conversationId ??= conversationIdRaw;
+      }
+      final acceptedAtRaw = data['acceptedAt'];
+      if (acceptedAtRaw is Timestamp) {
+        _acceptedAt ??= acceptedAtRaw.toDate();
+      }
+      final isGroup = data['isGroup'] == true;
+      if (mounted && _isGroupCall != isGroup) {
+        setState(() => _isGroupCall = isGroup);
+      }
+      final myId = SessionManager.instance.getUser()?.id;
+      if (!isGroup && myId != null && _chatPeerId == null) {
+        if (_callerId != null && _receiverId != null) {
+          _chatPeerId = myId == _callerId ? _receiverId : _callerId;
+        }
+      }
+
+      final isPaid = data['isPaid'] == true;
+      final costPerMinute = (data['costPerMinute'] as num?)?.toInt();
+      final commissionPercent = (data['commissionPercent'] as num?)?.toDouble();
+      final netPerMinute = (data['netPerMinute'] as num?)?.toInt() ??
+          ((costPerMinute != null && commissionPercent != null)
+              ? ((costPerMinute * (100.0 - commissionPercent)) / 100.0).floor()
+              : null);
+      final paidTotalCost = (data['paidTotalCost'] as num?)?.toInt();
+      final paidCommission = (data['paidCommission'] as num?)?.toInt();
+      final paidEarning = (data['paidEarning'] as num?)?.toInt();
+      if (mounted) {
+        final changed = _isPaidCall != isPaid ||
+            _paidCostPerMinute != costPerMinute ||
+            _paidCommissionPercent != commissionPercent ||
+            _paidNetPerMinute != netPerMinute ||
+            _paidTotalCost != paidTotalCost ||
+            _paidCommission != paidCommission ||
+            _paidEarning != paidEarning;
+        if (changed) {
+          setState(() {
+            _isPaidCall = isPaid;
+            _paidCostPerMinute = costPerMinute;
+            _paidCommissionPercent = commissionPercent;
+            _paidNetPerMinute = netPerMinute;
+            _paidTotalCost = paidTotalCost;
+            _paidCommission = paidCommission;
+            _paidEarning = paidEarning;
+          });
+        }
+      }
+
+      final hold = data['hold'];
+      final holdBy = data['holdBy'];
+      bool isRemoteHold = false;
+      if (hold == true && holdBy is String && myId != null) {
+        final byCaller = holdBy == 'caller';
+        final byReceiver = holdBy == 'receiver';
+        final iAmCaller = _callerId != null && myId == _callerId;
+        final iAmReceiver = _receiverId != null && myId == _receiverId;
+        isRemoteHold = (byCaller && iAmReceiver) || (byReceiver && iAmCaller)
+            ? true
+            : false;
+      }
+      if (mounted) {
+        if (_remoteHold != isRemoteHold) {
+          setState(() => _remoteHold = isRemoteHold);
+        }
+      }
+
+      if (status == 'ended' ||
+          status == 'declined' ||
+          status == 'missed' ||
+          status == 'busy') {
+        if (_closing) return;
+        _closing = true;
+        await _ringPlayer.stop();
+        try {
+          await ActiveCallManager.instance.endSession(updateFirestore: false);
+        } catch (_) {}
+        _safePop();
+      }
+    }, onError: (e) {
+      Loggers.error('[CALL] call doc listener error: $e');
+    });
+  }
+
+  Future<void> _sendInCallTextMessage(String text) async {
+    final myId = SessionManager.instance.getUser()?.id;
+    if (myId == null) return;
+    final peerId = _chatPeerId;
+    if (peerId == null) return;
+
+    final ids = [myId, peerId]..sort();
+    final conversationId = _conversationId ?? '${ids[0]}_${ids[1]}';
+
+    final time = DateTime.now().millisecondsSinceEpoch;
+    final msgId = time.toString();
+    final msg = chat.MessageData(
+      userId: myId,
+      conversationId: conversationId,
+      textMessage: text,
+      iAmBlocked: false,
+      iBlocked: false,
+      messageType: chat.MessageType.text,
+      id: time,
+      noDeleteIds: [myId, peerId],
+    );
+
+    final db = FirebaseFirestore.instance;
+    final msgRef = db
+        .collection(FirebaseConst.chats)
+        .doc(conversationId)
+        .collection(FirebaseConst.messages)
+        .doc(msgId);
+
+    final myThreadRef = db
+        .collection(FirebaseConst.users)
+        .doc(myId.toString())
+        .collection(FirebaseConst.usersList)
+        .doc(peerId.toString());
+
+    final peerThreadRef = db
+        .collection(FirebaseConst.users)
+        .doc(peerId.toString())
+        .collection(FirebaseConst.usersList)
+        .doc(myId.toString());
+
+    final batch = db.batch();
+    batch.set(msgRef, msg.toJson());
+    batch.set(
+      myThreadRef,
+      {
+        FirebaseConst.id: msgId,
+        'conversation_id': conversationId,
+        'user_id': peerId,
+        FirebaseConst.lastMsg: text,
+        FirebaseConst.lastMsgType: chat.MessageType.text.value,
+        FirebaseConst.msgCount: 0,
+        FirebaseConst.isDeleted: false,
+      },
+      SetOptions(merge: true),
+    );
+    batch.set(
+      peerThreadRef,
+      {
+        FirebaseConst.id: msgId,
+        'conversation_id': conversationId,
+        'user_id': myId,
+        FirebaseConst.lastMsg: text,
+        FirebaseConst.lastMsgType: chat.MessageType.text.value,
+        FirebaseConst.msgCount: FieldValue.increment(1),
+        FirebaseConst.isDeleted: false,
+      },
+      SetOptions(merge: true),
+    );
+    await batch.commit();
+  }
+
+  void _openInCallChat() {
+    final myId = SessionManager.instance.getUser()?.id;
+    final peerId = _chatPeerId;
+    if (myId == null || peerId == null) return;
+    final ids = [myId, peerId]..sort();
+    final conversationId = _conversationId ?? '${ids[0]}_${ids[1]}';
+
+    final input = TextEditingController();
+    Get.bottomSheet(
+      FractionallySizedBox(
+        heightFactor: 0.75,
+        child: Container(
+          color: Colors.white,
+          child: Column(
+            children: [
+              Container(
+                height: 52,
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                alignment: Alignment.centerLeft,
+                child: Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'Chat',
+                        style: TextStyle(
+                            fontSize: 18, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Get.back(),
+                      icon: const Icon(Icons.close),
+                    )
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+              Expanded(
+                child: StreamBuilder<QuerySnapshot>(
+                  stream: FirebaseFirestore.instance
+                      .collection(FirebaseConst.chats)
+                      .doc(conversationId)
+                      .collection(FirebaseConst.messages)
+                      .orderBy('id', descending: true)
+                      .limit(40)
+                      .snapshots(),
+                  builder: (context, snapshot) {
+                    final docs = snapshot.data?.docs ?? const [];
+                    return ListView.builder(
+                      reverse: true,
+                      itemCount: docs.length,
+                      itemBuilder: (context, index) {
+                        final d = docs[index].data() as Map<String, dynamic>;
+                        final text = d['text_message']?.toString() ?? '';
+                        if (text.trim().isEmpty) return const SizedBox.shrink();
+                        final uid = d['user_id'];
+                        final fromMe = (uid is num ? uid.toInt() : uid) == myId;
+                        return Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 6),
+                          alignment: fromMe
+                              ? Alignment.centerRight
+                              : Alignment.centerLeft,
+                          child: Container(
+                            constraints: const BoxConstraints(maxWidth: 280),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 10),
+                            decoration: BoxDecoration(
+                              color: fromMe
+                                  ? Colors.teal.withValues(alpha: 0.2)
+                                  : Colors.grey.withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              text,
+                              style: const TextStyle(fontSize: 14),
+                            ),
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+              SafeArea(
+                top: false,
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: input,
+                          decoration: const InputDecoration(
+                            hintText: 'Message',
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      IconButton(
+                        onPressed: () async {
+                          final t = input.text.trim();
+                          if (t.isEmpty) return;
+                          input.clear();
+                          await _sendInCallTextMessage(t);
+                        },
+                        icon: const Icon(Icons.send),
+                      )
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      isScrollControlled: true,
+    ).whenComplete(() => input.dispose());
+  }
+
+  Future<void> _toggleHold() async {
+    final roomId = widget.livestream.roomID;
+    if (_holdEnabled) {
+      final restoreMic = _preHoldMicEnabled;
+      final restoreCam = _preHoldCamEnabled;
+      _holdEnabled = false;
+      if (mounted) setState(() {});
+      await _applyMicEnabled(restoreMic);
+      if (!widget.isAudio) {
+        await _controller.livekitSetCameraEnabled?.call(restoreCam);
+      }
+      if (roomId != null && roomId.startsWith('call_')) {
+        try {
+          await FirebaseFirestore.instance
+              .collection('calls')
+              .doc(roomId)
+              .update({
+            'hold': false,
+            'holdBy': null,
+            'holdAt': null,
+          });
+        } catch (_) {}
+      }
+      return;
+    }
+
+    _preHoldMicEnabled = _micEnabled;
+    _preHoldCamEnabled = _camEnabled;
+    _holdEnabled = true;
+    if (mounted) setState(() {});
+    await _applyMicEnabled(false);
+    if (!widget.isAudio) {
+      await _controller.livekitSetCameraEnabled?.call(false);
+    }
+
+    if (roomId != null && roomId.startsWith('call_')) {
+      try {
+        final myId = SessionManager.instance.getUser()?.id;
+        String holdBy = 'unknown';
+        if (myId != null) {
+          if (_callerId != null && myId == _callerId) holdBy = 'caller';
+          if (_receiverId != null && myId == _receiverId) holdBy = 'receiver';
+        }
+        await FirebaseFirestore.instance
+            .collection('calls')
+            .doc(roomId)
+            .update({
+          'hold': true,
+          'holdBy': holdBy,
+          'holdAt': FieldValue.serverTimestamp(),
+        });
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _updateCallOnLocalEnd(String roomId, {String? endReason}) async {
+    try {
+      final myId = SessionManager.instance.getUser()?.id;
+      if (myId == null) return;
+      final snap = await FirebaseFirestore.instance
+          .collection('calls')
+          .doc(roomId)
+          .get();
+      final data = snap.data();
+      if (data == null) return;
+
+      final status = data['status'];
+      final acceptedAtRaw = data['acceptedAt'];
+      final hasAccepted = status == 'accepted' || acceptedAtRaw is Timestamp;
+      final isPaid = data['isPaid'] == true;
+      final existingBillingStatus = data['paidBillingStatus']?.toString();
+
+      final duration = _startTime != null
+          ? DateTime.now().difference(_startTime!).inSeconds
+          : 0;
+
+      String endedBy = 'unknown';
+      final callerIdRaw = data['callerId'];
+      final receiverIdRaw = data['receiverId'];
+      final callerId = callerIdRaw is num ? callerIdRaw.toInt() : null;
+      final receiverId = receiverIdRaw is num ? receiverIdRaw.toInt() : null;
+      if (callerId != null && myId == callerId) endedBy = 'caller';
+      if (receiverId != null && myId == receiverId) endedBy = 'receiver';
+
+      final newStatus =
+          hasAccepted ? 'ended' : (status == 'ringing' ? 'missed' : 'ended');
+
+      final Map<String, dynamic> update = {
+        'status': newStatus,
+        'endedAt': FieldValue.serverTimestamp(),
+        'endedBy': endedBy,
+        'duration': duration,
+      };
+      if (newStatus == 'missed') {
+        update['missedReason'] = 'offline';
+      }
+      if (endReason != null && endReason.isNotEmpty) {
+        update['endReason'] = endReason;
+      }
+      await FirebaseFirestore.instance
+          .collection('calls')
+          .doc(roomId)
+          .update(update);
+
+      if (isPaid &&
+          newStatus == 'ended' &&
+          duration > 0 &&
+          existingBillingStatus != 'success') {
+        try {
+          await FirebaseFirestore.instance
+              .collection('calls')
+              .doc(roomId)
+              .update({
+            'paidBillingStatus': 'processing',
+            'paidBillingAttemptedAt': FieldValue.serverTimestamp(),
+          });
+        } catch (_) {}
+
+        try {
+          final rawBillId = data['paidCallId']?.toString().trim();
+          final billId =
+              (rawBillId != null && rawBillId.isNotEmpty) ? rawBillId : roomId;
+          final res = await PaidCallService.instance.end(callId: billId);
+          if (res.status == true) {
+            await FirebaseFirestore.instance
+                .collection('calls')
+                .doc(roomId)
+                .update({
+              'paidBillingStatus': 'success',
+              'paidBilledAt': FieldValue.serverTimestamp(),
+              'paidBilledCallId': billId,
+              if (res.totalCost != null) 'paidTotalCost': res.totalCost,
+              if (res.commission != null) 'paidCommission': res.commission,
+              if (res.earning != null) 'paidEarning': res.earning,
+              if (res.commissionPercent != null)
+                'commissionPercent': res.commissionPercent,
+              if (res.costPerMinute != null) 'costPerMinute': res.costPerMinute,
+              if (res.durationSeconds != null) 'duration': res.durationSeconds,
+            });
+          } else {
+            await FirebaseFirestore.instance
+                .collection('calls')
+                .doc(roomId)
+                .update({
+              'paidBillingStatus': 'failed',
+              'paidBillingError': (res.message ?? 'Billing failed').toString(),
+              'paidBilledAt': FieldValue.serverTimestamp(),
+            });
+          }
+        } catch (e) {
+          final msg = e.toString();
+          await FirebaseFirestore.instance
+              .collection('calls')
+              .doc(roomId)
+              .update({
+            'paidBillingStatus': 'failed',
+            'paidBillingError': msg,
+            'paidBilledAt': FieldValue.serverTimestamp(),
+          });
+        }
+      }
+    } catch (e) {
+      Loggers.error("Failed to update disconnect status: $e");
+    }
+  }
+
+  void _initAudio() async {
+    try {
+      // Setup audio session for voice call (Communication mode)
+      // This is critical for earpiece routing on Android/iOS
+      final session = await AudioSession.instance;
+      // Note: AudioSessionConfiguration constants cannot be used with const constructor if they contain bitwise operations or non-constant objects in some versions.
+      // We remove 'const' to be safe.
+      await session.configure(AudioSessionConfiguration(
+        avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
+        avAudioSessionCategoryOptions:
+            AVAudioSessionCategoryOptions.allowBluetooth |
+                AVAudioSessionCategoryOptions.duckOthers,
+        avAudioSessionMode: AVAudioSessionMode.voiceChat,
+        androidAudioAttributes: const AndroidAudioAttributes(
+          contentType: AndroidAudioContentType.speech,
+          flags: AndroidAudioFlags.none,
+          usage: AndroidAudioUsage.voiceCommunication,
+        ),
+        androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
+        androidWillPauseWhenDucked: true,
+      ));
+
+      // Set initial speaker state (Default OFF for Earpiece)
+      // Important: Delay slightly to ensure audio system is ready
+      Future.delayed(const Duration(milliseconds: 500), () async {
+        await Hardware.instance.setSpeakerphoneOn(_speakerOn);
+      });
+
+      if (widget.token.isEmpty) {
+        await _ringPlayer.setAsset(AssetRes.turrTurr);
+        await _ringPlayer.setLoopMode(LoopMode.one);
+        await _ringPlayer.setVolume(1.0);
+        _ringPlayer.play();
+      }
+    } catch (e) {
+      Loggers.error('[CALL] Audio init failed: $e');
+    }
+  }
+
+  void _toggleSpeaker() async {
+    try {
+      final newStatus = !_speakerOn;
+      await NativeAudioManagement.setSpeakerphoneOn(newStatus);
+      if (mounted) setState(() => _speakerOn = newStatus);
+    } catch (e) {
+      Loggers.error('[CALL] Toggle speaker failed: $e');
+    }
+  }
+
+  Future<void> _refreshAudioOutputs() async {
+    try {
+      final outputs = await Helper.audiooutputs;
+      if (!mounted) return;
+      setState(() {
+        _audioOutputs = outputs;
+      });
+    } catch (e) {
+      Loggers.error('[CALL] audiooutputs failed: $e');
+    }
+  }
+
+  bool get _hasBluetoothOutput {
+    for (final d in _audioOutputs) {
+      final label = (d.label ?? '').toLowerCase();
+      if (label.contains('bluetooth')) return true;
+      if (label.contains('bt')) return true;
+    }
+    return false;
+  }
+
+  Future<void> _setRouteEarpiece() async {
+    _selectedAudioOutputId = null;
+    await NativeAudioManagement.setSpeakerphoneOn(false);
+    if (mounted) setState(() => _speakerOn = false);
+  }
+
+  Future<void> _setRouteSpeaker() async {
+    _selectedAudioOutputId = null;
+    await NativeAudioManagement.setSpeakerphoneOn(true);
+    if (mounted) setState(() => _speakerOn = true);
+  }
+
+  Future<void> _setRouteBluetooth() async {
+    await _refreshAudioOutputs();
+    final bt = _audioOutputs.firstWhereOrNull((d) {
+      final label = (d.label ?? '').toLowerCase();
+      return label.contains('bluetooth') || label.contains('bt');
+    });
+    if (bt != null && (bt.deviceId ?? '').isNotEmpty) {
+      _selectedAudioOutputId = bt.deviceId;
+      await Helper.selectAudioOutput(bt.deviceId);
+      if (mounted) setState(() {});
+      return;
+    }
+    _selectedAudioOutputId = null;
+    await NativeAudioManagement.setSpeakerphoneOnButPreferBluetooth();
+    if (mounted) setState(() => _speakerOn = false);
+  }
+
+  void _openAudioRouteSheet() async {
+    await _refreshAudioOutputs();
+    if (!mounted) return;
+    Get.bottomSheet(
+      Container(
+        color: Colors.white,
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.phone_in_talk),
+              title: const Text('Phone'),
+              onTap: () async {
+                Get.back();
+                await _setRouteEarpiece();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.volume_up),
+              title: const Text('Speaker'),
+              onTap: () async {
+                Get.back();
+                await _setRouteSpeaker();
+              },
+            ),
+            if (_hasBluetoothOutput)
+              ListTile(
+                leading: const Icon(Icons.bluetooth_audio),
+                title: const Text('Bluetooth'),
+                onTap: () async {
+                  Get.back();
+                  await _setRouteBluetooth();
+                },
+              ),
+          ],
+        ),
+      ),
+      backgroundColor: Colors.white,
+    );
+  }
+
+  void _wireControllerCallbacks() {
+    _controller.livekitSetMicrophoneEnabled = (enabled) async {
+      await _applyMicEnabled(enabled);
+    };
+    _controller.livekitSetCameraEnabled = (enabled) async {
+      await _room.localParticipant?.setCameraEnabled(enabled);
+      if (mounted) setState(() => _camEnabled = enabled);
+    };
+    _controller.livekitSwitchCamera = () async {
+      try {
+        final lp = _room.localParticipant;
+        final pubs = lp?.videoTrackPublications ?? const [];
+        final videoPub =
+            pubs.firstWhereOrNull((p) => p.track is LocalVideoTrack);
+        final track = videoPub?.track;
+        if (track is! LocalVideoTrack) return;
+
+        final devices = await Hardware.instance.enumerateDevices();
+        final videoInputs = devices.where((d) {
+          final k = d.kind;
+          return k.toString().toLowerCase().contains('videoinput');
+        }).toList();
+        if (videoInputs.isEmpty) return;
+
+        final currentId = _cameraDeviceId;
+        final nextDevice = videoInputs.firstWhereOrNull(
+              (d) => currentId != null && d.deviceId != currentId,
+            ) ??
+            videoInputs.first;
+
+        _cameraDeviceId = nextDevice.deviceId;
+        await track.switchCamera(nextDevice.deviceId);
+      } catch (e) {
+        Loggers.error('[CALL] switchCamera failed: $e');
+      }
+    };
+    _controller.livekitApplyArSettings = (params) async {
+      final track = _localCameraMediaTrack();
+      if (track == null) return;
+      try {
+        await Helper.setExternalVideoProcessingProvider(track, 'deepar',
+            params: params);
+        await Helper.setExternalVideoProcessingEnabled(track, true);
+      } catch (e) {
+        Loggers.error('[CALL] apply AR failed: $e');
+      }
+    };
+    _controller.livekitDisconnect = () async {
+      await _handleDisconnect();
+    };
+  }
+
+  void _listenToCallStatus() {
+    final roomId = widget.livestream.roomID;
+    if (roomId != null && roomId.startsWith('call_')) {
+      _callStatusSub = FirebaseFirestore.instance
+          .collection('calls')
+          .doc(roomId)
+          .snapshots()
+          .listen((snapshot) async {
+        if (snapshot.exists) {
+          final data = snapshot.data();
+          final status = data?['status'];
+          final declineReason = data?['declineReason'];
+          final acceptedAtRaw = data?['acceptedAt'];
+
+          // If Accepted, JOIN ROOM (Caller Side)
+          if (status == 'accepted' && widget.token.isEmpty && !_connecting) {
+            // STOP RINGTONE IMMEDIATELY & CANCEL TIMEOUT
+            await _ringPlayer.stop();
+            _callTimeoutTimer?.cancel();
+
+            // Generate token and join!
+            final myId = SessionManager.instance.getUser()?.id;
+            if (myId == null) return;
+
+            setState(() => _connecting = true);
+
+            try {
+              _unsubEvents?.call();
+              _unsubEvents = _room.events.listen(_handleRoomEvents);
+
+              final tokenResp = await LiveKitService.instance.generateToken(
+                roomName: roomId,
+                userIdentity: '$myId',
+                userName: SessionManager.instance.getUser()?.username ?? 'User',
+              );
+
+              if (tokenResp != null) {
+                _livekitUrl = tokenResp.livekitUrl;
+                _livekitToken = tokenResp.token;
+                ActiveCallManager.instance
+                    .updateCredentials(url: _livekitUrl, token: _livekitToken);
+                // Connect now
+                const opts = RoomOptions(
+                  adaptiveStream: true,
+                  dynacast: true,
+                );
+
+                await _room.connect(
+                  tokenResp.livekitUrl,
+                  tokenResp.token,
+                  roomOptions: opts,
+                );
+
+                await _room.localParticipant?.setMicrophoneEnabled(_micEnabled);
+                await _room.localParticipant?.setCameraEnabled(_camEnabled);
+
+                final remotes = _room.remoteParticipants.values.toList();
+                if (remotes.isNotEmpty) {
+                  final rp = remotes.first;
+                  _remoteParticipantIdentity = rp.identity;
+                  if (_startTime == null) {
+                    _startDurationTimer();
+                  }
+                }
+
+                if (!mounted) return;
+                setState(() {
+                  _connecting = false;
+                  _error = null;
+                  _connectAttempt = 0;
+                });
+              }
+            } catch (e) {
+              Loggers.error("Failed to join room after accept: $e");
+              if (mounted) {
+                setState(() {
+                  _connecting = false;
+                  _error = 'Call failed to connect. Retrying...';
+                });
+              }
+              if (_livekitUrl?.isNotEmpty == true &&
+                  _livekitToken?.isNotEmpty == true) {
+                _scheduleReconnect();
+              }
+            }
+            return;
+          }
+
+          if (status == 'declined' || status == 'missed') {
+            // Handle missed too
+            await _ringPlayer.stop(); // Stop audio explicitly
+            if (mounted) {
+              final isWaitingCaller = widget.token.isEmpty;
+              final wasAccepted =
+                  acceptedAtRaw is Timestamp || status == 'accepted';
+              if (status == 'declined' && isWaitingCaller && !wasAccepted) {
+                final receiverId = (data?['receiverId'] as num?)?.toInt();
+                if (receiverId != null && receiverId > 0) {
+                  await SessionManager.instance.setCallCooldownUntil(
+                    otherUserId: receiverId,
+                    until: DateTime.now().add(const Duration(minutes: 5)),
+                  );
+                }
+              }
+
+              final reasonMsg = status == 'missed'
+                  ? 'No Answer'
+                  : (declineReason != null
+                      ? 'User declined: $declineReason'
+                      : 'User declined the call');
+
+              Get.snackbar('Call Ended', reasonMsg,
+                  snackPosition: SnackPosition.BOTTOM,
+                  backgroundColor: Colors.red,
+                  colorText: Colors.white);
+              _safePop();
+            }
+          } else if (status == 'busy') {
+            await _ringPlayer.stop();
+            if (mounted) {
+              Get.snackbar('Call Ended', 'User is on another call (Waiting)',
+                  snackPosition: SnackPosition.BOTTOM,
+                  backgroundColor: Colors.orange,
+                  colorText: Colors.white);
+              _safePop();
+            }
+          }
+        }
+      });
+    }
+  }
+
+  void _handleRoomEvents(LiveKitEvent event) {
+    if (event is DataReceivedEvent) {
+      final from = event.participant?.identity;
+      if (from != null && event.topic == 'raise_hand') {
+        try {
+          final text = utf8.decode(event.data);
+          final decoded = jsonDecode(text);
+          final raised = decoded is Map ? decoded['raised'] == true : false;
+          _raisedHands[from] = raised;
+          if (mounted) setState(() {});
+        } catch (_) {}
+      }
+    }
+    if (event is RoomConnectedEvent) {
+      Loggers.info('[CALL] Connected to room');
+      _reconnectTimer?.cancel();
+      _reconnecting = false;
+      _reconnectAttempt = 0;
+      Future.delayed(const Duration(milliseconds: 250), () {
+        if (!mounted) return;
+        if (_remoteParticipantIdentity == null &&
+            _room.remoteParticipants.isNotEmpty) {
+          final first = _room.remoteParticipants.values.first;
+          _remoteLeftTimer?.cancel();
+          _remoteParticipantIdentity = first.identity;
+          if (_startTime == null) {
+            _startDurationTimer();
+          }
+          setState(() {});
+        }
+      });
+    }
+    if (event is RoomDisconnectedEvent) {
+      Loggers.info('[CALL] Disconnected');
+      if (_closing) return;
+      _pendingEndReason ??= 'network';
+      final canReconnect =
+          (_acceptedAt != null || _remoteParticipantIdentity != null) &&
+              (_livekitUrl?.isNotEmpty == true) &&
+              (_livekitToken?.isNotEmpty == true);
+      if (canReconnect) {
+        _scheduleReconnect();
+      } else if (_error == null && mounted) {
+        Get.snackbar('Disconnected', 'Call disconnected.',
+            snackPosition: SnackPosition.BOTTOM,
+            backgroundColor: Colors.red,
+            colorText: Colors.white);
+      }
+    }
+    if (event is ParticipantConnectedEvent) {
+      Loggers.info(
+          '[CALL] Participant connected: ${event.participant.identity}');
+      _ringPlayer.stop(); // Stop ringing
+      _callTimeoutTimer?.cancel(); // Cancel timeout
+      _remoteLeftTimer?.cancel();
+
+      // Start duration timer only if not already started
+      if (_startTime == null) {
+        _startDurationTimer();
+      }
+
+      setState(() {
+        _remoteParticipantIdentity = event.participant.identity;
+      });
+    }
+    if (event is ParticipantDisconnectedEvent) {
+      Loggers.info('[CALL] Participant disconnected');
+      setState(() {
+        _remoteParticipantIdentity = null;
+        _remoteVideoTrack = null;
+      });
+      if (_closing) return;
+      _remoteLeftTimer?.cancel();
+      _remoteLeftTimer = Timer(const Duration(seconds: 30), () {
+        if (_closing) return;
+        if (_remoteParticipantIdentity == null) {
+          _pendingEndReason ??= 'remote_left';
+          _closing = true;
+          _handleDisconnect();
+        }
+      });
+    }
+    if (event is TrackSubscribedEvent) {
+      if (event.track is VideoTrack) {
+        setState(() {
+          _remoteVideoTrack = event.track as VideoTrack;
+        });
+      }
+    }
+    if (event is TrackUnsubscribedEvent) {
+      if (event.track is VideoTrack) {
+        setState(() {
+          _remoteVideoTrack = null;
+        });
+      }
+    }
+
+    // Network Quality Handling
+    if (event is ParticipantConnectionQualityUpdatedEvent) {
+      _connectionQuality = event.connectionQuality;
+      if (event.connectionQuality == ConnectionQuality.poor) {
+        if (mounted) {
+          Get.snackbar('Weak Connection', 'Network quality is poor',
+              snackPosition: SnackPosition.TOP,
+              duration: const Duration(seconds: 2),
+              backgroundColor: Colors.orange,
+              colorText: Colors.white,
+              margin: const EdgeInsets.all(10));
+        }
+      }
+    }
+  }
+
+  void _scheduleReconnect() {
+    if (_closing) return;
+    if (_reconnectTimer != null) return;
+    if (_reconnectAttempt >= 5) {
+      if (mounted) {
+        Get.snackbar(
+            'Disconnected', 'Unable to reconnect. Check network and retry.',
+            snackPosition: SnackPosition.BOTTOM,
+            backgroundColor: Colors.red,
+            colorText: Colors.white);
+      }
+      _reconnecting = false;
+      _reconnectTimer?.cancel();
+      _reconnectTimer = null;
+      if (mounted) setState(() {});
+      return;
+    }
+
+    _reconnecting = true;
+    if (mounted) setState(() {});
+
+    final delaySeconds = 1 << _reconnectAttempt;
+    _reconnectTimer = Timer(Duration(seconds: delaySeconds), () async {
+      _reconnectTimer = null;
+      if (_closing) return;
+
+      _reconnectAttempt++;
+      if (mounted) setState(() {});
+
+      try {
+        _unsubEvents?.call();
+        _unsubEvents = _room.events.listen(_handleRoomEvents);
+        const opts = RoomOptions(adaptiveStream: true, dynacast: true);
+        await _room.connect(_livekitUrl!, _livekitToken!, roomOptions: opts);
+        await _room.localParticipant?.setMicrophoneEnabled(_micEnabled);
+        await _room.localParticipant?.setCameraEnabled(_camEnabled);
+
+        _reconnecting = false;
+        _reconnectAttempt = 0;
+        if (mounted) setState(() {});
+      } catch (e) {
+        Loggers.error('[CALL] reconnect failed: $e');
+        _scheduleReconnect();
+      }
+    });
+  }
+
+  Future<void> _connect() async {
+    try {
+      _connectAttempt++;
+      await WakelockPlus.enable();
+
+      _unsubEvents = _room.events.listen(_handleRoomEvents);
+
+      const opts = RoomOptions(
+        adaptiveStream: true,
+        dynacast: true,
+      );
+
+      _livekitUrl = widget.url;
+      _livekitToken = widget.token;
+      ActiveCallManager.instance
+          .updateCredentials(url: _livekitUrl, token: _livekitToken);
+      await _room.connect(
+        widget.url,
+        widget.token,
+        roomOptions: opts,
+      );
+
+      await _room.localParticipant?.setMicrophoneEnabled(_micEnabled);
+      await _room.localParticipant?.setCameraEnabled(_camEnabled);
+
+      if (!mounted) return;
+      setState(() {
+        _connecting = false;
+        _error = null;
+        _connectAttempt = 0;
+      });
+    } catch (e) {
+      Loggers.error('[CALL] Connection failed: $e');
+      if (mounted) {
+        setState(() {
+          _connecting = false;
+          _error = 'Call failed to connect. Retrying...';
+        });
+      }
+      if (_livekitUrl?.isNotEmpty == true &&
+          _livekitToken?.isNotEmpty == true) {
+        _scheduleReconnect();
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    // Stop ringing first
+    _ringPlayer.stop();
+    _ringPlayer.dispose();
+
+    final mgr = ActiveCallManager.instance;
+    final minimizing = mgr.minimized && mgr.callId == widget.livestream.roomID;
+    if (!minimizing) {
+      DashboardScreenController.isCallActive = false;
+      DashboardScreenController.currentCallId = null;
+    }
+
+    _durationTimer?.cancel();
+    _callTimeoutTimer?.cancel();
+    _callStatusSub?.cancel();
+    _reconnectTimer?.cancel();
+    _remoteLeftTimer?.cancel();
+    _unsubEvents?.call();
+    if (!minimizing) {
+      _room.disconnect();
+      WakelockPlus.disable();
+    }
+    super.dispose();
+  }
+
+  void _startDurationTimer() {
+    _startTime = DateTime.now();
+    ActiveCallManager.instance.setStartedAt(_startTime);
+    _durationTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  void _resumeDurationTicker() {
+    _durationTimer?.cancel();
+    _durationTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  String _formatDuration(Duration duration) {
+    String twoDigits(int n) => n.toString().padLeft(2, "0");
+    String twoDigitMinutes = twoDigits(duration.inMinutes.remainder(60));
+    String twoDigitSeconds = twoDigits(duration.inSeconds.remainder(60));
+    if (duration.inHours > 0) {
+      return "${twoDigits(duration.inHours)}:$twoDigitMinutes:$twoDigitSeconds";
+    }
+    return "$twoDigitMinutes:$twoDigitSeconds";
+  }
+
+  VideoTrack? _cameraVideoTrack(Participant participant) {
+    final pubs = participant.videoTrackPublications;
+    final pub = pubs.firstWhereOrNull((p) =>
+        p.track is VideoTrack &&
+        (p.source == TrackSource.camera || p.source == TrackSource.unknown));
+    return pub?.track is VideoTrack ? pub!.track as VideoTrack : null;
+  }
+
+  VideoTrack? _screenShareVideoTrack(Participant participant) {
+    final pubs = participant.videoTrackPublications;
+    final pub =
+        pubs.firstWhereOrNull((p) => p.source == TrackSource.screenShareVideo);
+    return pub?.track is VideoTrack ? pub!.track as VideoTrack : null;
+  }
+
+  Widget _buildParticipantTile(RemoteParticipant participant) {
+    final track = _cameraVideoTrack(participant);
+    final raised = _raisedHands[participant.identity] == true;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: track != null
+                ? VideoTrackRenderer(track, fit: VideoViewFit.cover)
+                : Container(
+                    color: Colors.grey[900],
+                    child: Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.person,
+                              color: Colors.white70, size: 42),
+                          const SizedBox(height: 8),
+                          Text(
+                            participant.identity,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyleCustom.outFitRegular400(
+                                color: Colors.white70, fontSize: 12),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+          ),
+          if (raised)
+            Positioned(
+              top: 10,
+              right: 10,
+              child: Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.55),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child:
+                    const Icon(Icons.back_hand, color: Colors.amber, size: 18),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRemoteStage(String statusText) {
+    final remotes = _room.remoteParticipants.values.toList();
+    VideoTrack? screenShare;
+    for (final p in remotes) {
+      final t = _screenShareVideoTrack(p);
+      if (t != null) {
+        screenShare = t;
+        break;
+      }
+    }
+    if (screenShare != null) {
+      return SizedBox.expand(
+        child: VideoTrackRenderer(
+          screenShare,
+          fit: VideoViewFit.contain,
+        ),
+      );
+    }
+    if (remotes.isEmpty) {
+      return Container(
+        color: Colors.grey[900],
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CustomImage(
+                size: const Size(100, 100),
+                image: (widget.livestream.hostUser?.profile ?? '').addBaseURL(),
+                fit: BoxFit.cover,
+                radius: 50,
+              ),
+              const SizedBox(height: 20),
+              Text(
+                statusText,
+                style: TextStyleCustom.outFitBold700(
+                    color: Colors.white, fontSize: 18),
+              ),
+              if (_connectionQuality != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    'Network: ${_connectionQuality == ConnectionQuality.poor ? 'Poor' : (_connectionQuality == ConnectionQuality.good ? 'Good' : 'Excellent')}',
+                    style: TextStyleCustom.outFitRegular400(
+                      color: Colors.white70,
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+              if (_remoteHold)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    'Other user is on hold',
+                    style: TextStyleCustom.outFitRegular400(
+                      color: Colors.white70,
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      );
+    }
+    if (remotes.length == 1) {
+      final track = _cameraVideoTrack(remotes.first);
+      if (track != null) {
+        return SizedBox.expand(
+          child: VideoTrackRenderer(track, fit: VideoViewFit.cover),
+        );
+      }
+    }
+
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: GridView.builder(
+        physics: const NeverScrollableScrollPhysics(),
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2,
+          mainAxisSpacing: 10,
+          crossAxisSpacing: 10,
+          childAspectRatio: 9 / 16,
+        ),
+        itemCount: remotes.length,
+        itemBuilder: (context, index) {
+          return _buildParticipantTile(remotes[index]);
+        },
+      ),
+    );
+  }
+
+  Widget _buildTopBar({
+    required String title,
+    required String subtitle,
+    String? paidLine,
+  }) {
+    return SafeArea(
+      bottom: false,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        child: Row(
+          children: [
+            CustomBorderRoundIcon(
+              widget: const Icon(Icons.arrow_back, color: Colors.white),
+              onTap: () {
+                ActiveCallManager.instance.showOverlay(context);
+                _safePop();
+              },
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyleCustom.outFitBold700(
+                        color: Colors.white, fontSize: 16),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyleCustom.outFitRegular400(
+                        color: Colors.white70, fontSize: 12),
+                  ),
+                  if (paidLine != null && paidLine.trim().isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      paidLine,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyleCustom.outFitRegular400(
+                          color: Colors.white70, fontSize: 12),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            CustomBorderRoundIcon(
+              widget: const Icon(Icons.person_add, color: Colors.white),
+              onTap: _openAddParticipantSheet,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAudioStage({
+    required String avatarUrl,
+  }) {
+    return Stack(
+      children: [
+        const Positioned.fill(child: ThemeBlurBg()),
+        Positioned.fill(
+          child: Container(color: Colors.black.withValues(alpha: 0.65)),
+        ),
+        Center(
+          child: Container(
+            width: 170,
+            height: 170,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.10),
+              shape: BoxShape.circle,
+            ),
+            child: ClipOval(
+              child: avatarUrl.isNotEmpty
+                  ? CustomImage(
+                      size: const Size(170, 170),
+                      image: avatarUrl,
+                      fit: BoxFit.cover,
+                      radius: 85,
+                    )
+                  : const Center(
+                      child:
+                          Icon(Icons.person, color: Colors.white70, size: 70),
+                    ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildLocalPip() {
+    if (!_camEnabled || _room.localParticipant == null) return const SizedBox();
+    return Positioned(
+      right: 14,
+      top: 84,
+      child: Container(
+        width: 108,
+        height: 162,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.7), width: 1.2),
+          color: Colors.black,
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(11),
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: _LocalVideoView(participant: _room.localParticipant!),
+              ),
+              Positioned(
+                top: 8,
+                right: 8,
+                child: Column(
+                  children: [
+                    CustomBorderRoundIcon(
+                      widget: const Icon(Icons.cameraswitch,
+                          color: Colors.white, size: 18),
+                      onTap: () => _controller.livekitSwitchCamera?.call(),
+                    ),
+                    const SizedBox(height: 10),
+                    CustomBorderRoundIcon(
+                      widget: const Icon(Icons.auto_fix_high,
+                          color: Colors.white, size: 18),
+                      onTap: () => unawaited(_controller.openBeautySheet()),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Determine status text based on role
+    // If I am the host (Caller), I am waiting for the user to join.
+    // If I am the guest (Receiver), I am connecting.
+    final isHost =
+        widget.livestream.hostId == SessionManager.instance.getUser()?.id;
+
+    // Status Logic
+    String statusText = _connecting
+        ? 'Connecting...'
+        : (isHost
+            ? (widget.token.isEmpty ? 'Ringing...' : 'Connecting...')
+            : 'Connecting...');
+
+    if (_startTime != null && _room.remoteParticipants.isNotEmpty) {
+      statusText = _formatDuration(
+          DateTime.now().difference(_startTime ?? DateTime.now()));
+    }
+    if (_reconnecting) {
+      statusText = 'Reconnecting...';
+    }
+    if (_holdEnabled) {
+      statusText = 'On Hold';
+    }
+
+    final peer = _peerUser();
+    final title = _isGroupCall
+        ? 'Group call'
+        : (peer?.fullname ??
+            peer?.username ??
+            widget.livestream.hostUser?.fullname ??
+            widget.livestream.hostUser?.username ??
+            'Call');
+    final rawAvatar =
+        peer?.profile ?? widget.livestream.hostUser?.profile ?? '';
+    final avatarUrl = rawAvatar.isNotEmpty ? rawAvatar.addBaseURL() : '';
+    final showAudioUi = widget.isAudio && !_camEnabled;
+    String? paidLine;
+    if (_isPaidCall) {
+      if (isHost && _paidCostPerMinute != null) {
+        paidLine =
+            LKey.paidCallRate.trParams({'rate': _paidCostPerMinute.toString()});
+      } else if (!isHost && (_paidNetPerMinute ?? _paidCostPerMinute) != null) {
+        paidLine = LKey.paidCallEarningRate.trParams({
+          'rate': (_paidNetPerMinute ?? _paidCostPerMinute).toString(),
+        });
+      }
+    }
+
+    return WillPopScope(
+      onWillPop: () async {
+        ActiveCallManager.instance.showOverlay(context);
+        return true;
+      },
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: Stack(
+          children: [
+            if (showAudioUi)
+              _buildAudioStage(avatarUrl: avatarUrl)
+            else
+              _buildRemoteStage(statusText),
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: _buildTopBar(
+                title: title,
+                subtitle: statusText,
+                paidLine: paidLine,
+              ),
+            ),
+            if (!showAudioUi) _buildLocalPip(),
+            const Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: BlackGradientShadow(height: 240),
+            ),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 14,
+              child: SafeArea(
+                top: false,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    _CallButton(
+                      icon: Icons.more_horiz,
+                      color: Colors.white.withValues(alpha: 0.2),
+                      iconColor: Colors.white,
+                      onTap: _openCallMenu,
+                    ),
+                    _CallButton(
+                      icon: _camEnabled ? Icons.videocam : Icons.videocam_off,
+                      color: Colors.white.withValues(alpha: 0.2),
+                      iconColor: Colors.white,
+                      onTap: () async {
+                        await _applyCameraEnabled(!_camEnabled);
+                      },
+                    ),
+                    _CallButton(
+                      icon: Icons.auto_fix_high,
+                      color: Colors.white.withValues(alpha: 0.2),
+                      iconColor: Colors.white,
+                      onTap: () => unawaited(_controller.openBeautySheet()),
+                    ),
+                    _CallButton(
+                      icon: _speakerOn ? Icons.volume_up : Icons.volume_down,
+                      color: Colors.white.withValues(alpha: 0.2),
+                      iconColor: Colors.white,
+                      onTap: _toggleSpeaker,
+                    ),
+                    _CallButton(
+                      icon: _micEnabled ? Icons.mic : Icons.mic_off,
+                      color: Colors.white.withValues(alpha: 0.2),
+                      iconColor: Colors.white,
+                      onTap: () async {
+                        await _applyMicEnabled(!_micEnabled);
+                      },
+                    ),
+                    _CallButton(
+                      icon: Icons.call_end,
+                      color: Colors.red,
+                      iconColor: Colors.white,
+                      onTap: () => _controller.livekitDisconnect?.call(),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _LocalVideoView extends StatelessWidget {
+  final LocalParticipant participant;
+
+  const _LocalVideoView({required this.participant});
+
+  @override
+  Widget build(BuildContext context) {
+    // Find the first camera track
+    final trackPub = participant.videoTrackPublications.firstWhereOrNull(
+        (pub) =>
+            pub.track is LocalVideoTrack && pub.source == TrackSource.camera);
+
+    if (trackPub?.track != null) {
+      return VideoTrackRenderer(
+        trackPub!.track as VideoTrack,
+        fit: VideoViewFit.cover,
+      );
+    }
+    return const Center(child: Icon(Icons.person, color: Colors.white));
+  }
+}
+
+class _CallButton extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final Color iconColor;
+  final VoidCallback onTap;
+
+  const _CallButton({
+    required this.icon,
+    required this.color,
+    required this.iconColor,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(15),
+        decoration: BoxDecoration(
+          color: color,
+          shape: BoxShape.circle,
+        ),
+        child: Icon(icon, color: iconColor, size: 30),
+      ),
+    );
+  }
+}
+
+class _FxTabButton extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _FxTabButton({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        decoration: BoxDecoration(
+          color: selected ? Colors.white.withValues(alpha: 0.18) : Colors.transparent,
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(
+            color: selected ? Colors.white.withValues(alpha: 0.45) : Colors.white24,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyleCustom.outFitRegular400(
+            fontSize: 13,
+            color: selected ? Colors.white : Colors.white70,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _FxCircle extends StatelessWidget {
+  final bool selected;
+  final String label;
+  final String? imageUrl;
+  final Color? color;
+  final VoidCallback onTap;
+
+  const _FxCircle({
+    required this.selected,
+    required this.label,
+    required this.onTap,
+    this.imageUrl,
+  }) : color = null;
+
+  @override
+  Widget build(BuildContext context) {
+    final borderColor = selected ? Colors.white : Colors.white24;
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 56,
+            height: 56,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(color: borderColor, width: selected ? 2 : 1),
+            ),
+            child: ClipOval(
+              child: Builder(
+                builder: (_) {
+                  if (imageUrl != null && imageUrl!.isNotEmpty) {
+                    return Image.network(
+                      imageUrl!,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) =>
+                          Container(color: Colors.white12),
+                    );
+                  }
+                  if (color != null) {
+                    return Container(color: color);
+                  }
+                  return Container(
+                    color: Colors.white12,
+                    child: const Center(
+                      child: Icon(Icons.auto_awesome, color: Colors.white70),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+          SizedBox(
+            width: 64,
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: TextStyleCustom.outFitRegular400(
+                fontSize: 11,
+                color: Colors.white70,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

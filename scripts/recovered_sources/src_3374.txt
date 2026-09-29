@@ -1,0 +1,3966 @@
+�import 'dart:async';
+import 'dart:io';
+import 'dart:convert';
+
+import 'package:archive/archive.dart';
+import 'package:path/path.dart' as p;
+import 'package:audio_waveforms/audio_waveforms.dart' hide PlayerState;
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:audio_session/audio_session.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_webrtc/src/native/audio_management.dart'
+    as webrtc_audio;
+import 'package:get/get.dart';
+import 'package:just_audio/just_audio.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:shortzz/common/controller/ads_controller.dart';
+import 'package:shortzz/common/controller/base_controller.dart';
+import 'package:shortzz/common/controller/firebase_firestore_controller.dart';
+import 'package:shortzz/common/extensions/string_extension.dart';
+import 'package:shortzz/common/extensions/user_extension.dart';
+import 'package:shortzz/common/manager/firebase_notification_manager.dart';
+import 'package:shortzz/common/manager/haptic_manager.dart';
+import 'package:shortzz/common/manager/logger.dart';
+import 'package:shortzz/common/manager/session_manager.dart';
+import 'package:shortzz/common/service/api/common_service.dart';
+import 'package:shortzz/common/service/api/config_service.dart';
+import 'package:shortzz/common/service/api/livekit_service.dart';
+import 'package:shortzz/common/service/api/notification_service.dart';
+import 'package:shortzz/common/widget/confirmation_dialog.dart';
+import 'package:shortzz/languages/languages_keys.dart';
+import 'package:shortzz/model/general/settings_model.dart';
+import 'package:shortzz/model/livestream/app_user.dart';
+import 'package:shortzz/model/livestream/livestream.dart';
+import 'package:shortzz/model/livestream/livestream_comment.dart';
+import 'package:shortzz/model/livestream/livestream_user_state.dart';
+import 'package:shortzz/model/user_model/user_model.dart';
+import 'package:shortzz/screen/gif_sheet/gif_sheet.dart';
+import 'package:shortzz/screen/gif_sheet/gif_sheet_controller.dart';
+import 'package:shortzz/screen/gift_sheet/send_gift_sheet.dart';
+import 'package:shortzz/screen/gift_sheet/send_gift_sheet_controller.dart';
+import 'package:shortzz/screen/music_sheet/music_sheet.dart';
+import 'package:shortzz/model/post_story/music/music_model.dart';
+import 'package:shortzz/screen/live_stream/live_stream_end_screen/live_stream_end_screen.dart';
+import 'package:shortzz/screen/live_stream/live_stream_end_screen/widget/livestream_summary.dart';
+import 'package:shortzz/screen/live_stream/livekit/livekit_audience_screen.dart';
+import 'package:shortzz/screen/live_stream/livekit/livekit_host_screen.dart';
+import 'package:shortzz/screen/live_stream/livestream_screen/audience/widget/live_stream_join_sheet.dart';
+import 'package:shortzz/screen/report_sheet/report_sheet.dart';
+import 'package:shortzz/utilities/app_res.dart';
+import 'package:shortzz/utilities/asset_res.dart';
+import 'package:shortzz/utilities/color_res.dart';
+import 'package:shortzz/utilities/firebase_const.dart';
+import 'package:shortzz/utilities/text_style_custom.dart';
+import 'package:shortzz/utilities/theme_res.dart';
+import 'package:shortzz/common/widget/text_button_custom.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:video_player/video_player.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
+
+class LivestreamScreenController extends BaseController {
+  FirebaseFirestore db = FirebaseFirestore.instance;
+
+  static const String lockedSeatValue = 'LOCKED';
+
+  final bool _bootstrapProvider;
+
+  Future<void> Function(bool enabled)? livekitSetMicrophoneEnabled;
+  Future<void> Function(bool enabled)? livekitSetCameraEnabled;
+  Future<void> Function()? livekitSwitchCamera;
+  Future<void> Function()? livekitDisconnect;
+
+  Future<void> Function(Map<String, dynamic> params)? livekitApplyArSettings;
+
+  final firestoreController = Get.find<FirebaseFirestoreController>();
+  final adsController = Get.find<AdsController>();
+
+  Timer? timer;
+  Timer? minViewerTimeoutTimer;
+  Function? onLikeTap;
+
+  bool _isExiting = false;
+  bool _handledLiveDeleted = false;
+
+  Timer? _applyLivekitArDebounce;
+  Completer<void>? _applyLivekitArCompleter;
+  String? _lastLivekitArPayloadHash;
+
+  Directory? _deepArEffectsBaseDir;
+  RxString currentEffectPath = ''.obs;
+  Rx<DeepARFilters?> selectedEffect = Rx<DeepARFilters?>(null);
+
+  Setting? get setting => SessionManager.instance.getSettings();
+
+  int get minViewersThreshold => setting?.liveMinViewers ?? 0;
+
+  int get timeoutMinutes => setting?.liveTimeout ?? 0;
+
+  int get myUserId => SessionManager.instance.getUserID();
+
+  RxBool isPlayerMute = false.obs;
+  RxBool isMinViewerTimeout = false.obs;
+  RxBool isTextEmpty = true.obs;
+
+  RxBool isArEnabled = false.obs;
+  RxBool isArPanelOpen = false.obs;
+  RxBool isStickerEnabled = true.obs;
+  final RxDouble arBeautySmooth = 0.65.obs;
+  final RxDouble arBeautyBrighten = 0.35.obs;
+  final RxDouble arBeautySharpen = 0.25.obs;
+  final RxDouble arBeautyGlow = 0.0.obs;
+  final RxString arFilterPreset = 'none'.obs;
+  // Backend-only LUT URL (no asset/local LUTs bundled in app)
+  final RxString arFilterLutAssetPath = ''.obs;
+
+  final RxDouble arColorExposure = 0.0.obs; // -2..2
+  final RxDouble arColorBrightness = 0.0.obs; // -1..1
+  final RxDouble arColorContrast = 1.0.obs; // 0..2
+  final RxDouble arColorSaturation = 1.0.obs; // 0..2
+  final RxDouble arColorTemperature = 0.0.obs; // -100..100
+  final RxDouble arColorTint = 0.0.obs; // -100..100
+  final RxDouble arColorHighlights = 0.0.obs; // -100..100
+  final RxDouble arColorShadows = 0.0.obs; // -100..100
+  final RxDouble arColorSharpen = 0.25.obs; // 0..1
+  final RxDouble arColorFade = 0.0.obs; // 0..1
+
+  // Makeup Kit parameters
+  final RxDouble arMakeupSkinSmooth = 0.0.obs; // 0..1
+  final RxDouble arMakeupFaceTone = 0.0.obs; // 0..1
+  final RxDouble arMakeupLipsColor = 0.0.obs; // 0..1
+  final RxDouble arMakeupBlush = 0.0.obs; // 0..1
+  final RxDouble arMakeupHighlight = 0.0.obs; // 0..1
+  final RxDouble arMakeupEyeBrightness = 0.0.obs; // 0..1
+  final RxDouble arMakeupSoftContour = 0.0.obs; // 0..1
+  final RxDouble arMakeupFoundation = 0.0.obs; // 0..1
+  final RxDouble arMakeupEyeshadow = 0.0.obs; // 0..1
+  final RxDouble arMakeupEyelashes = 0.0.obs; // 0..1
+  final RxDouble arMakeupEyebrows = 0.0.obs; // 0..1
+
+  // Face Morphing
+  final RxDouble arFaceEyeSize = 0.0.obs;
+  final RxDouble arFaceShape = 0.0.obs;
+  final RxDouble arFaceNoseSize = 0.0.obs;
+  final RxDouble arFaceChinSize = 0.0.obs;
+  final RxDouble arFaceMouthPos = 0.0.obs;
+
+  // Hair
+  final RxDouble arHairStrength = 0.0.obs;
+  final Rx<Color> arHairColor = Colors.black.obs;
+
+  bool isJoinSheetOpen = false;
+  bool isFrontCamera = true;
+  bool isHost;
+
+  bool? _lastLocalMicPublish;
+  int _lastAudioGateLogMs = 0;
+
+  static const double _defaultBeautySmooth = 0.65;
+  static const double _defaultBeautyBrighten = 0.35;
+  static const double _defaultBeautySharpen = 0.25;
+  static const double _defaultBeautyGlow = 0.0;
+
+  static const String _defaultFilterPreset = 'none';
+  static const String _defaultLutAssetPath = '';
+
+  static const double _defaultColorExposure = 0.0;
+  static const double _defaultColorBrightness = 0.0;
+  static const double _defaultColorContrast = 1.0;
+  static const double _defaultColorSaturation = 1.0;
+  static const double _defaultColorTemperature = 0.0;
+  static const double _defaultColorTint = 0.0;
+  static const double _defaultColorHighlights = 0.0;
+  static const double _defaultColorShadows = 0.0;
+  static const double _defaultColorSharpen = 0.25;
+  static const double _defaultColorFade = 0.0;
+
+  StreamSubscription<DocumentSnapshot>? liveStreamDocListener;
+  StreamSubscription<QuerySnapshot<LivestreamUserState?>>?
+      liveStreamUserStatesListener;
+  StreamSubscription<QuerySnapshot<LivestreamComment?>>?
+      liveStreamCommentsListener;
+
+  TextEditingController textCommentController = TextEditingController();
+  FocusNode textCommentFocusNode = FocusNode();
+  RecorderController? liveCommentRecorder;
+  final RxBool isLiveCommentRecording = false.obs;
+
+  DocumentReference get liveStreamDocRef =>
+      db.collection(FirebaseConst.liveStreams).doc(liveData.value.roomID);
+
+  CollectionReference get liveStreamUsersRef =>
+      db.collection(FirebaseConst.appUsers);
+
+  CollectionReference get liveStreamUserStatesRef => db
+      .collection(FirebaseConst.liveStreams)
+      .doc(liveData.value.roomID)
+      .collection(FirebaseConst.userState);
+
+  CollectionReference get liveStreamCommentsRef => db
+      .collection(FirebaseConst.liveStreams)
+      .doc(liveData.value.roomID)
+      .collection(FirebaseConst.comments);
+
+  Widget? hostPreview;
+  final bool isCall;
+
+  LivestreamScreenController(this.liveData, this.isHost,
+      {this.hostPreview, bool bootstrapProvider = true, this.isCall = false})
+      : _bootstrapProvider = bootstrapProvider;
+
+  int totalBattleSecond = 0;
+
+  RxInt remainingBattleSeconds = 0.obs;
+  RxBool isViewVisible = true.obs;
+  final RxBool allowRoutePop = false.obs;
+
+  List<LivestreamUserState> memberList = <LivestreamUserState>[];
+
+  List<Gift> get gifts => setting?.gifts ?? [];
+  RxList<LivestreamUserState> requestList = <LivestreamUserState>[].obs;
+  RxList<LivestreamUserState> audienceList = <LivestreamUserState>[].obs;
+  RxList<LivestreamUserState> invitedList = <LivestreamUserState>[].obs;
+  RxList<LivestreamUserState> coHostList = <LivestreamUserState>[].obs;
+  RxList<LivestreamUserState> audienceMemberList = <LivestreamUserState>[].obs;
+  RxList<StreamView> streamViews = <StreamView>[].obs;
+  RxList<LivestreamComment> comments = <LivestreamComment>[].obs;
+  RxList<LivestreamUserState> liveUsersStates = <LivestreamUserState>[].obs;
+
+  final RxSet<int> speakingUserIds = <int>{}.obs;
+
+  Rx<AppUser?> selectedGiftUser = Rx(null);
+  Rx<VideoPlayerController?> videoPlayerController = Rx(null);
+
+  final AudioPlayer liveMusicPlayer = AudioPlayer();
+  final Rx<Map<String, dynamic>> liveMusicState = Rx(<String, dynamic>{});
+  final RxList<int> liveMusicControlCohostIds = <int>[].obs;
+  final RxInt liveMusicPositionMs = 0.obs;
+  final RxInt liveMusicDurationMs = 0.obs;
+  Timer? _liveMusicProgressTimer;
+  String? _lastLiveMusicStateHash;
+  String? _liveMusicCurrentUrl;
+  String? _liveMusicCurrentFilePath;
+  String? _liveMusicLocalMonitorUrl;
+
+  bool get _useNativeLiveMusicMixing => Platform.isAndroid;
+
+  Rx<User?> get myUser => SessionManager.instance.getUser().obs;
+  Rx<Livestream> liveData;
+
+  AudioPlayer countdownPlayer = AudioPlayer();
+  AudioPlayer battleStartPlayer = AudioPlayer();
+  AudioPlayer winAudioPlayer = AudioPlayer();
+
+  List<User> usersList = [];
+
+  final Map<String, String> _lutResolvedPathCache = <String, String>{};
+  final Set<String> _lutDownloadInFlight = <String>{};
+
+  Future<String?> _resolveLutFilePathForLivekit() async {
+    try {
+      if (arFilterPreset.value != 'lut') return null;
+      final input = arFilterLutAssetPath.value.trim();
+      if (input.isEmpty) return null;
+
+      final cached = _lutResolvedPathCache[input];
+      if (cached != null && cached.trim().isNotEmpty) {
+        return cached;
+      }
+
+      if (input.startsWith('http://') || input.startsWith('https://')) {
+        if (_lutDownloadInFlight.contains(input)) {
+          return null;
+        }
+        _lutDownloadInFlight.add(input);
+        // Non-blocking download: avoid freezing UI thread.
+        DefaultCacheManager().getSingleFile(input).then((f) {
+          try {
+            final p = f.path;
+            if (p.trim().isNotEmpty) {
+              _lutResolvedPathCache[input] = p;
+              // If user is still on LUT preset, re-apply to push file path to native.
+              if (arFilterPreset.value == 'lut') {
+                applyLivekitArSettings();
+              }
+            }
+          } catch (_) {}
+        }).whenComplete(() {
+          _lutDownloadInFlight.remove(input);
+        });
+        return null;
+      }
+      return null;
+    } catch (e) {
+      Loggers.error('[LIVEKIT] resolve lut file path failed: $e');
+      return null;
+    }
+  }
+
+  bool get canControlLiveMusic {
+    if (isHost) return true;
+    return liveMusicControlCohostIds.contains(myUserId);
+  }
+
+  bool get isLiveMusicEnabled {
+    final st = liveMusicState.value;
+    return (st['enabled'] == true);
+  }
+
+  bool get isLiveMusicPlaying {
+    final st = liveMusicState.value;
+    return (st['playing'] == true);
+  }
+
+  int _readIntSafe(dynamic v) {
+    if (v is int) return v;
+    return int.tryParse('$v') ?? 0;
+  }
+
+  List<Map<String, dynamic>> get liveMusicQueue {
+    final st = liveMusicState.value;
+    final raw = st['queue'];
+    if (raw is! List) return const <Map<String, dynamic>>[];
+    return raw
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList(growable: false);
+  }
+
+  int get liveMusicQueueIndex {
+    final st = liveMusicState.value;
+    return _readIntSafe(st['queueIndex']);
+  }
+
+  bool get isLiveMusicRepeat {
+    final st = liveMusicState.value;
+    return st['repeat'] == true;
+  }
+
+  bool get canGoNextLiveMusic {
+    final q = liveMusicQueue;
+    if (q.length <= 1) return false;
+    return liveMusicQueueIndex < q.length - 1;
+  }
+
+  bool get canGoPrevLiveMusic {
+    final q = liveMusicQueue;
+    if (q.length <= 1) return false;
+    return liveMusicQueueIndex > 0;
+  }
+
+  List<String> get liveMusicQueueTitles {
+    final q = liveMusicQueue;
+    if (q.isEmpty) {
+      final t = liveMusicTitle;
+      if (t.trim().isEmpty) return const <String>[];
+      return <String>[t];
+    }
+    return q
+        .map((e) => (e['title'] ?? '').toString())
+        .where((e) => e.trim().isNotEmpty)
+        .toList(growable: false);
+  }
+
+  Map<String, dynamic> _musicToQueueItem(Music m) {
+    final soundUrl = (m.sound?.addBaseURL() ?? '').toString();
+    return <String, dynamic>{
+      'musicId': m.id,
+      'title': m.title,
+      'artist': m.artist,
+      'image': m.image,
+      'soundUrl': soundUrl,
+    };
+  }
+
+  Future<void> toggleLiveMusicRepeat() async {
+    if (!canControlLiveMusic) return;
+    final st = Map<String, dynamic>.from(liveMusicState.value);
+    if (st.isEmpty || st['enabled'] != true) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    st['repeat'] = !(st['repeat'] == true);
+    st['updatedAtMs'] = now;
+    st['issuedBy'] = myUserId;
+    await updateLiveStreamData(liveMusicState: st);
+  }
+
+  Future<void> playLiveMusicQueueIndex(int index) async {
+    if (!canControlLiveMusic) return;
+    final st = Map<String, dynamic>.from(liveMusicState.value);
+    if (st.isEmpty || st['enabled'] != true) return;
+
+    final q = liveMusicQueue;
+    if (q.isEmpty) return;
+    final idx = index.clamp(0, q.length - 1);
+
+    final item = q[idx];
+    final now = DateTime.now().millisecondsSinceEpoch;
+    st['queueIndex'] = idx;
+    st['musicId'] = item['musicId'];
+    st['title'] = item['title'];
+    st['artist'] = item['artist'];
+    st['image'] = item['image'];
+    st['soundUrl'] = item['soundUrl'];
+    st['playing'] = true;
+    st['startedAtMs'] = now;
+    st['startPositionMs'] = 0;
+    st['pausedPositionMs'] = 0;
+    st['updatedAtMs'] = now;
+    st['issuedBy'] = myUserId;
+    await updateLiveStreamData(liveMusicState: st);
+  }
+
+  Future<void> seekLiveMusicTo(int positionMs) async {
+    if (!canControlLiveMusic) return;
+    final st = Map<String, dynamic>.from(liveMusicState.value);
+    if (st.isEmpty || st['enabled'] != true) return;
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final playing = st['playing'] == true;
+    final safe = positionMs < 0 ? 0 : positionMs;
+
+    if (playing) {
+      st['startedAtMs'] = now;
+      st['startPositionMs'] = safe;
+      st['pausedPositionMs'] = safe;
+    } else {
+      st['pausedPositionMs'] = safe;
+      st['startPositionMs'] = safe;
+    }
+    st['updatedAtMs'] = now;
+    st['issuedBy'] = myUserId;
+
+    // Host should feel immediate.
+    if (_useNativeLiveMusicMixing && isHost) {
+      try {
+        await webrtc_audio.NativeAudioManagement.liveMusicMixSeek(safe);
+      } catch (_) {}
+    }
+
+    await updateLiveStreamData(liveMusicState: st);
+  }
+
+  Future<void> nextLiveMusic() async {
+    if (!canControlLiveMusic) return;
+    final st = Map<String, dynamic>.from(liveMusicState.value);
+    if (st.isEmpty || st['enabled'] != true) return;
+
+    final q = liveMusicQueue;
+    if (q.isEmpty) return;
+
+    int idx = liveMusicQueueIndex;
+    if (idx >= q.length - 1) {
+      return;
+    } else {
+      idx++;
+    }
+
+    final item = q[idx];
+    final now = DateTime.now().millisecondsSinceEpoch;
+    st['queueIndex'] = idx;
+    st['musicId'] = item['musicId'];
+    st['title'] = item['title'];
+    st['artist'] = item['artist'];
+    st['image'] = item['image'];
+    st['soundUrl'] = item['soundUrl'];
+    st['playing'] = true;
+    st['startedAtMs'] = now;
+    st['startPositionMs'] = 0;
+    st['pausedPositionMs'] = 0;
+    st['updatedAtMs'] = now;
+    st['issuedBy'] = myUserId;
+    await updateLiveStreamData(liveMusicState: st);
+  }
+
+  Future<void> prevLiveMusic() async {
+    if (!canControlLiveMusic) return;
+    final st = Map<String, dynamic>.from(liveMusicState.value);
+    if (st.isEmpty || st['enabled'] != true) return;
+
+    final q = liveMusicQueue;
+    if (q.isEmpty) return;
+
+    int idx = liveMusicQueueIndex;
+    if (idx <= 0) {
+      return;
+    } else {
+      idx--;
+    }
+
+    final item = q[idx];
+    final now = DateTime.now().millisecondsSinceEpoch;
+    st['queueIndex'] = idx;
+    st['musicId'] = item['musicId'];
+    st['title'] = item['title'];
+    st['artist'] = item['artist'];
+    st['image'] = item['image'];
+    st['soundUrl'] = item['soundUrl'];
+    st['playing'] = true;
+    st['startedAtMs'] = now;
+    st['startPositionMs'] = 0;
+    st['pausedPositionMs'] = 0;
+    st['updatedAtMs'] = now;
+    st['issuedBy'] = myUserId;
+    await updateLiveStreamData(liveMusicState: st);
+  }
+
+  void _startLiveMusicProgressPolling() {
+    _liveMusicProgressTimer?.cancel();
+    _liveMusicProgressTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) async {
+        try {
+          if (!isLiveMusicEnabled) {
+            liveMusicPositionMs.value = 0;
+            liveMusicDurationMs.value = 0;
+            return;
+          }
+
+          // Always drive UI from just_audio monitor playback.
+          // Native mixing position/duration can be 0/unstable on some devices.
+          liveMusicPositionMs.value = liveMusicPlayer.position.inMilliseconds;
+          final d = liveMusicPlayer.duration;
+          liveMusicDurationMs.value = d?.inMilliseconds ?? 0;
+
+          // Optional: keep native duration in logs for debugging.
+          if (_useNativeLiveMusicMixing && isHost) {
+            try {
+              final dur = await webrtc_audio.NativeAudioManagement
+                  .liveMusicMixGetDurationMs();
+              if (dur <= 0 && (d?.inMilliseconds ?? 0) > 0) {
+                // ok (fallback used)
+              }
+            } catch (e, st) {
+              Loggers.error('[LIVE_MUSIC] native duration read failed: $e\n$st');
+            }
+          }
+        } catch (e, st) {
+          Loggers.error('[LIVE_MUSIC] progress poll failed: $e\n$st');
+        }
+      },
+    );
+  }
+
+  void _stopLiveMusicProgressPolling() {
+    _liveMusicProgressTimer?.cancel();
+    _liveMusicProgressTimer = null;
+  }
+
+  String get liveMusicTitle {
+    final st = liveMusicState.value;
+    final title = (st['title'] ?? '').toString();
+    return title;
+  }
+
+  String get liveMusicArtist {
+    final st = liveMusicState.value;
+    final artist = (st['artist'] ?? '').toString();
+    return artist;
+  }
+
+  String get liveMusicImage {
+    final st = liveMusicState.value;
+    final raw = (st['image'] ?? '').toString();
+    if (raw.trim().isEmpty) return '';
+    // Backend often sends relative paths.
+    try {
+      return raw.addBaseURL();
+    } catch (_) {
+      return raw;
+    }
+  }
+
+  StreamSubscription<dynamic>? _liveMusicPlayerStateSub;
+  int _lastLiveMusicCompleteHandledMs = 0;
+
+  Future<void> _applyLiveMusicState(Map<String, dynamic> st) async {
+    try {
+      final enabled = st['enabled'] == true;
+      if (!enabled) {
+        _stopLiveMusicProgressPolling();
+        if (_useNativeLiveMusicMixing && isHost) {
+          await webrtc_audio.NativeAudioManagement.liveMusicMixStop();
+          // Stop forcing mic publish when music disabled.
+          await applyLocalAudioGate();
+        }
+        // Stop local monitor playback (audience + host monitor).
+        try {
+          await liveMusicPlayer.stop();
+        } catch (e, st) {
+          Loggers.error('[LIVE_MUSIC] stop player failed: $e\n$st');
+        }
+        return;
+      }
+      final url = (st['soundUrl'] ?? '').toString();
+      if (url.trim().isEmpty) return;
+
+      // Ensure audio output is allowed for music playback.
+      try {
+        final session = await AudioSession.instance;
+        await session.configure(const AudioSessionConfiguration.music());
+        await session.setActive(true);
+      } catch (e, st) {
+        Loggers.error('[LIVE_MUSIC] AudioSession activate failed: $e\n$st');
+      }
+
+      final startedAtMs = (st['startedAtMs'] is int)
+          ? (st['startedAtMs'] as int)
+          : int.tryParse('${st['startedAtMs'] ?? 0}') ?? 0;
+      final startPositionMs = (st['startPositionMs'] is int)
+          ? (st['startPositionMs'] as int)
+          : int.tryParse('${st['startPositionMs'] ?? 0}') ?? 0;
+      final pausedPositionMs = (st['pausedPositionMs'] is int)
+          ? (st['pausedPositionMs'] as int)
+          : int.tryParse('${st['pausedPositionMs'] ?? 0}') ?? 0;
+      final shouldPlay = st['playing'] == true;
+
+      _startLiveMusicProgressPolling();
+
+      if (_useNativeLiveMusicMixing && isHost) {
+        // Host: native mixing injects into published audio, but we still keep a
+        // local monitor playback so host can hear the music too.
+        try {
+          final needLoadLocal = (_liveMusicLocalMonitorUrl ?? '') != url;
+          if (needLoadLocal) {
+            _liveMusicLocalMonitorUrl = url;
+            await liveMusicPlayer.setUrl(url);
+          }
+        } catch (e, st) {
+          Loggers.error('[LIVE_MUSIC] host monitor setUrl failed: $e\n$st');
+        }
+
+        final needLoad = (_liveMusicCurrentUrl ?? '') != url;
+        if (needLoad) {
+          _liveMusicCurrentUrl = url;
+          final file = await DefaultCacheManager().getSingleFile(url);
+          _liveMusicCurrentFilePath = file.path;
+          await webrtc_audio.NativeAudioManagement.liveMusicMixStart(
+            filePath: _liveMusicCurrentFilePath ?? '',
+            volume: 0.6,
+          );
+        }
+
+        if (shouldPlay) {
+          final now = DateTime.now().millisecondsSinceEpoch;
+          final pos = (startedAtMs > 0)
+              ? (now - startedAtMs + startPositionMs)
+              : startPositionMs;
+          await webrtc_audio.NativeAudioManagement.liveMusicMixSeek(
+              pos < 0 ? 0 : pos);
+          await webrtc_audio.NativeAudioManagement.liveMusicMixResume();
+
+          // local monitor
+          try {
+            final safe = Duration(milliseconds: pos.clamp(0, 1 << 31));
+            await liveMusicPlayer.seek(safe);
+            await liveMusicPlayer.play();
+          } catch (e, st) {
+            Loggers.error('[LIVE_MUSIC] host monitor play failed: $e\n$st');
+          }
+        } else {
+          await webrtc_audio.NativeAudioManagement.liveMusicMixSeek(
+              pausedPositionMs < 0 ? 0 : pausedPositionMs);
+          await webrtc_audio.NativeAudioManagement.liveMusicMixPause();
+
+          // local monitor
+          try {
+            final safe = Duration(
+                milliseconds: pausedPositionMs.clamp(0, 1 << 31));
+            await liveMusicPlayer.seek(safe);
+            await liveMusicPlayer.pause();
+          } catch (e, st) {
+            Loggers.error('[LIVE_MUSIC] host monitor pause failed: $e\n$st');
+          }
+        }
+
+        // Ensure mic publish state is re-applied so audience can hear injected music.
+        await applyLocalAudioGate();
+        return;
+      }
+
+      final needLoad = (_liveMusicCurrentUrl ?? '') != url;
+      if (needLoad) {
+        _liveMusicCurrentUrl = url;
+        try {
+          await liveMusicPlayer.setUrl(url);
+        } catch (e, st) {
+          Loggers.error('[LIVE_MUSIC] audience setUrl failed: $e\n$st');
+          return;
+        }
+      }
+
+      if (shouldPlay) {
+        final now = DateTime.now().millisecondsSinceEpoch;
+        final pos = (startedAtMs > 0)
+            ? (now - startedAtMs + startPositionMs)
+            : startPositionMs;
+        final safe = Duration(milliseconds: pos.clamp(0, 1 << 31));
+        try {
+          await liveMusicPlayer.seek(safe);
+          await liveMusicPlayer.play();
+        } catch (e, st) {
+          Loggers.error('[LIVE_MUSIC] audience play failed: $e\n$st');
+        }
+      } else {
+        final safe = Duration(milliseconds: pausedPositionMs.clamp(0, 1 << 31));
+        try {
+          await liveMusicPlayer.seek(safe);
+          await liveMusicPlayer.pause();
+        } catch (e, st) {
+          Loggers.error('[LIVE_MUSIC] audience pause failed: $e\n$st');
+        }
+      }
+    } catch (e, st) {
+      Loggers.error('[LIVE_MUSIC] apply failed: $e\n$st');
+    }
+  }
+
+  Future<void> _syncLiveMusicFromSnapshotData(Map<String, dynamic> data) async {
+    try {
+      final raw = data[FirebaseConst.liveMusicState];
+      final st =
+          (raw is Map) ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
+
+      final rawAllowed = data[FirebaseConst.liveMusicControlCohosts];
+      final allowed = <int>[];
+      if (rawAllowed is List) {
+        for (final v in rawAllowed) {
+          if (v is int) {
+            allowed.add(v);
+          } else {
+            final parsed = int.tryParse('$v');
+            if (parsed != null) allowed.add(parsed);
+          }
+        }
+      }
+      liveMusicControlCohostIds.assignAll(allowed);
+
+      final hash = _stableJsonEncode(st);
+      if (_lastLiveMusicStateHash == hash) return;
+      _lastLiveMusicStateHash = hash;
+
+      liveMusicState.value = st;
+      await _applyLiveMusicState(st);
+    } catch (_) {}
+  }
+
+  Future<void> openLiveMusicPicker() async {
+    if (!canControlLiveMusic) {
+      showSnackBar('Music control allowed nahi hai');
+      return;
+    }
+    final music = await Get.bottomSheet<Music>(
+      const MusicSheet(videoDurationInSecond: 60, isForLiveStream: true),
+      isScrollControlled: true,
+      enableDrag: false,
+      isDismissible: false,
+    );
+    if (music == null) return;
+    await playLiveMusic(music);
+  }
+
+  Future<void> playLiveMusic(Music music) async {
+    if (!canControlLiveMusic) return;
+    final m = music;
+    final soundUrl = (m.sound?.addBaseURL() ?? '').toString();
+    if (soundUrl.trim().isEmpty) {
+      showSnackBar('Invalid music');
+      return;
+    }
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final st = Map<String, dynamic>.from(liveMusicState.value);
+    final queueItem = _musicToQueueItem(m);
+
+    // If already enabled, treat selection as "play now" + append to queue.
+    if (st.isNotEmpty && st['enabled'] == true) {
+      final q = liveMusicQueue.toList(growable: true);
+      q.add(queueItem);
+      final idx = q.length - 1;
+
+      st['enabled'] = true;
+      st['queue'] = q;
+      st['queueIndex'] = idx;
+      st['repeat'] = st['repeat'] == true;
+
+      st['musicId'] = queueItem['musicId'];
+      st['title'] = queueItem['title'];
+      st['artist'] = queueItem['artist'];
+      st['image'] = queueItem['image'];
+      st['soundUrl'] = queueItem['soundUrl'];
+
+      st['playing'] = true;
+      st['startedAtMs'] = now;
+      st['startPositionMs'] = 0;
+      st['pausedPositionMs'] = 0;
+
+      st['issuedBy'] = myUserId;
+      st['updatedAtMs'] = now;
+      st['lastSoundUrl'] = queueItem['soundUrl'];
+      await updateLiveStreamData(liveMusicState: st);
+      return;
+    }
+
+    // First play initializes queue.
+    final payload = <String, dynamic>{
+      'enabled': true,
+      'playing': true,
+      'musicId': m.id,
+      'title': m.title,
+      'artist': m.artist,
+      'image': m.image,
+      'soundUrl': soundUrl,
+      'queue': <Map<String, dynamic>>[queueItem],
+      'queueIndex': 0,
+      'repeat': false,
+      'startedAtMs': now,
+      'startPositionMs': 0,
+      'pausedPositionMs': 0,
+      'issuedBy': myUserId,
+      'updatedAtMs': now,
+      'lastSoundUrl': soundUrl,
+    };
+
+    await updateLiveStreamData(liveMusicState: payload);
+  }
+
+  Future<void> toggleLiveMusicPlayPause() async {
+    if (!canControlLiveMusic) return;
+    final st = Map<String, dynamic>.from(liveMusicState.value);
+    if (st.isEmpty || st['enabled'] != true) return;
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final playing = st['playing'] == true;
+
+    int readInt(dynamic v) {
+      if (v is int) return v;
+      return int.tryParse('$v') ?? 0;
+    }
+
+    int computeNowPositionMs(Map<String, dynamic> s) {
+      final startedAtMs = readInt(s['startedAtMs']);
+      final startPositionMs = readInt(s['startPositionMs']);
+      if (startedAtMs <= 0) return startPositionMs;
+      final pos = now - startedAtMs + startPositionMs;
+      return pos < 0 ? 0 : pos;
+    }
+
+    if (playing) {
+      int pos;
+      if (_useNativeLiveMusicMixing && isHost) {
+        try {
+          pos = await webrtc_audio.NativeAudioManagement
+              .liveMusicMixGetPositionMs();
+        } catch (_) {
+          pos = computeNowPositionMs(st);
+        }
+      } else {
+        pos = liveMusicPlayer.position.inMilliseconds;
+      }
+      st['playing'] = false;
+      st['pausedPositionMs'] = pos;
+      st['updatedAtMs'] = now;
+      st['issuedBy'] = myUserId;
+    } else {
+      final pausedMs = readInt(st['pausedPositionMs']);
+      st['playing'] = true;
+      st['startedAtMs'] = now;
+      st['startPositionMs'] = pausedMs;
+      st['updatedAtMs'] = now;
+      st['issuedBy'] = myUserId;
+    }
+
+    await updateLiveStreamData(liveMusicState: st);
+  }
+
+  Future<void> stopLiveMusic() async {
+    if (!canControlLiveMusic) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (_useNativeLiveMusicMixing && isHost) {
+      try {
+        await webrtc_audio.NativeAudioManagement.liveMusicMixStop();
+      } catch (_) {}
+    }
+    await updateLiveStreamData(liveMusicState: <String, dynamic>{
+      'enabled': false,
+      'playing': false,
+      'updatedAtMs': now,
+      'issuedBy': myUserId,
+    });
+  }
+
+  Future<void> openLiveMusicPermissionSheet() async {
+    if (!isHost) {
+      showSnackBar('Only host permission de sakta hai');
+      return;
+    }
+    final cohosts = liveUsersStates
+        .where((e) => e.type == LivestreamUserType.coHost)
+        .toList(growable: false);
+    if (cohosts.isEmpty) {
+      showSnackBar('Koi co-host available nahi hai');
+      return;
+    }
+
+    final selected = liveMusicControlCohostIds.toSet();
+    Get.bottomSheet(
+      StatefulBuilder(
+        builder: (context, setState) {
+          return Container(
+            width: double.infinity,
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+            decoration: BoxDecoration(
+              color: whitePure(context),
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(20)),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Music Control',
+                  style: TextStyleCustom.unboundedBold700(
+                      fontSize: 16, color: textDarkGrey(context)),
+                ),
+                const SizedBox(height: 10),
+                Flexible(
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: cohosts.length,
+                    itemBuilder: (context, index) {
+                      final st = cohosts[index];
+                      final user = st.getUser(firestoreController.users);
+                      final checked = selected.contains(st.userId);
+                      return ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(
+                          user?.username ?? '${st.userId}',
+                          style: TextStyleCustom.outFitMedium500(
+                              color: textDarkGrey(context)),
+                        ),
+                        subtitle: Text(
+                          user?.fullname ?? '',
+                          style: TextStyleCustom.outFitRegular400(
+                              color: textLightGrey(context)),
+                        ),
+                        trailing: Switch(
+                          value: checked,
+                          onChanged: (v) {
+                            setState(() {
+                              if (v) {
+                                selected.add(st.userId);
+                              } else {
+                                selected.remove(st.userId);
+                              }
+                            });
+                          },
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: TextButtonCustom(
+                    onTap: () async {
+                      Get.back();
+                      await updateLiveStreamData(
+                        liveMusicControlCohostIds:
+                            selected.toList(growable: false),
+                      );
+                    },
+                    title: 'Apply',
+                    backgroundColor: themeAccentSolid(context),
+                    titleColor: whitePure(context),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+      isScrollControlled: true,
+    );
+  }
+
+  Future<Directory> _getDeepArEffectsBaseDir() async {
+    if (_deepArEffectsBaseDir != null) return _deepArEffectsBaseDir!;
+    final support = await getApplicationSupportDirectory();
+    final base = Directory(p.join(support.path, 'deepar_effects'));
+    if (!await base.exists()) {
+      await base.create(recursive: true);
+    }
+    _deepArEffectsBaseDir = base;
+    return base;
+  }
+
+  Future<void> _unzipToDir(File zipFile, Directory targetDir) async {
+    final bytes = await zipFile.readAsBytes();
+    final archive = ZipDecoder().decodeBytes(bytes, verify: true);
+    for (final entry in archive) {
+      final name = entry.name;
+      if (name.isEmpty) continue;
+      if (p.isAbsolute(name)) continue;
+      final normalized = p.normalize(name);
+      if (normalized.startsWith('..')) continue;
+      final outPath = p.join(targetDir.path, normalized);
+      if (entry.isFile) {
+        final outFile = File(outPath);
+        await outFile.parent.create(recursive: true);
+        final data = entry.content as List<int>;
+        await outFile.writeAsBytes(data, flush: true);
+      } else {
+        await Directory(outPath).create(recursive: true);
+      }
+    }
+  }
+
+  Future<String?> _resolveDeepArEffectPath(DeepARFilters effect) async {
+    final url = (effect.filterFile?.trim() ?? '').isNotEmpty
+        ? effect.filterFile!.trim().addBaseURL()
+        : '';
+    if (url.isEmpty) return null;
+    try {
+      final downloadedFile = await DefaultCacheManager()
+          .getSingleFile(url)
+          .timeout(const Duration(seconds: 15));
+      final filePath = downloadedFile.path;
+      final lower = filePath.toLowerCase();
+      if (!lower.endsWith('.zip')) return filePath;
+
+      final base = await _getDeepArEffectsBaseDir();
+      final safeName =
+          '${effect.id}_${p.basenameWithoutExtension(filePath)}'.replaceAll(
+        RegExp(r'[^a-zA-Z0-9_\\-\\.]'),
+        '_',
+      );
+      final targetDir = Directory(p.join(base.path, safeName));
+      if (await targetDir.exists()) {
+        final config = File(p.join(targetDir.path, 'config.json'));
+        if (await config.exists()) {
+          return targetDir.path;
+        }
+      }
+      try {
+        if (await targetDir.exists()) {
+          await targetDir.delete(recursive: true);
+        }
+        await targetDir.create(recursive: true);
+        await _unzipToDir(downloadedFile, targetDir);
+        return targetDir.path;
+      } catch (e) {
+        Loggers.error('[DeepAR] unzip failed: $e');
+        return filePath;
+      }
+    } catch (e) {
+      Loggers.error('[DeepAR] download failed: $e');
+      return null;
+    }
+  }
+
+  Future<void> applyLivekitArSettings() {
+    _applyLivekitArDebounce?.cancel();
+    final prev = _applyLivekitArCompleter;
+    if (prev != null && !prev.isCompleted) {
+      prev.complete();
+    }
+    final c = Completer<void>();
+    _applyLivekitArCompleter = c;
+    _applyLivekitArDebounce =
+        Timer(const Duration(milliseconds: 120), () async {
+      try {
+        await _applyLivekitArSettingsNow();
+      } finally {
+        if (!c.isCompleted) c.complete();
+        if (identical(_applyLivekitArCompleter, c)) {
+          _applyLivekitArCompleter = null;
+        }
+      }
+    });
+    return c.future;
+  }
+
+  Future<void> _applyLivekitArSettingsNow() async {
+    final cb = livekitApplyArSettings;
+    if (cb == null) {
+      Loggers.info(
+          '[LIVEKIT] applyLivekitArSettings skipped: callback not set');
+      return;
+    }
+    try {
+      final isUiEnabled = isArEnabled.value;
+
+      String filterPath = '';
+      if (isUiEnabled) {
+        final resolved = await _resolveLutFilePathForLivekit();
+        if (resolved != null) {
+          filterPath = resolved;
+        }
+      }
+
+      final s = setting;
+      final token =
+          (GetPlatform.isIOS ? s?.deeparIOSKey : s?.deeparAndroidKey) ?? '';
+
+      if (token.isEmpty) {
+        Loggers.error('[LIVEKIT] DeepAR token is empty! Check settings.');
+      }
+
+      final params = <String, dynamic>{
+        'token': token.trim(),
+        'effectPath': isUiEnabled ? currentEffectPath.value : '',
+        'filterPath': filterPath,
+        'mirror': false,
+        'smooth': isUiEnabled ? arBeautySmooth.value : 0.0,
+        'brighten': isUiEnabled ? arBeautyBrighten.value : 0.0,
+        'sharpen': isUiEnabled ? arBeautySharpen.value : 0.0,
+        'eyeSize': isUiEnabled ? arFaceEyeSize.value : 0.0,
+        'faceShape': isUiEnabled ? arFaceShape.value : 0.0,
+        'noseSize': isUiEnabled ? arFaceNoseSize.value : 0.0,
+        'chinSize': isUiEnabled ? arFaceChinSize.value : 0.0,
+        'mouthPos': isUiEnabled ? arFaceMouthPos.value : 0.0,
+        'makeup': {
+          'lips': isUiEnabled ? arMakeupLipsColor.value : 0.0,
+          'blush': isUiEnabled ? arMakeupBlush.value : 0.0,
+          'foundation': isUiEnabled ? arMakeupFoundation.value : 0.0,
+          'eyeshadow': isUiEnabled ? arMakeupEyeshadow.value : 0.0,
+          'eyelashes': isUiEnabled ? arMakeupEyelashes.value : 0.0,
+          'eyebrows': isUiEnabled ? arMakeupEyebrows.value : 0.0,
+          'hair': {
+            'strength': isUiEnabled ? arHairStrength.value : 0.0,
+            'color': [
+              arHairColor.value.red / 255.0,
+              arHairColor.value.green / 255.0,
+              arHairColor.value.blue / 255.0
+            ],
+          }
+        },
+      };
+
+      final payloadHash = _stableJsonEncode(params);
+      if (_lastLivekitArPayloadHash == payloadHash) {
+        return;
+      }
+      _lastLivekitArPayloadHash = payloadHash;
+
+      await cb(params);
+    } catch (e) {
+      Loggers.error('[LIVEKIT] apply ar settings failed: $e');
+    }
+  }
+
+  String _stableJsonEncode(Object? value) {
+    Object? normalize(Object? v) {
+      if (v is num) {
+        return double.parse(v.toDouble().toStringAsFixed(4));
+      }
+      if (v is Map) {
+        final entries = v.entries
+            .map((e) => MapEntry(e.key.toString(), normalize(e.value)))
+            .toList()
+          ..sort((a, b) => a.key.compareTo(b.key));
+        return <String, Object?>{for (final e in entries) e.key: e.value};
+      }
+      if (v is Iterable) {
+        return v.map(normalize).toList(growable: false);
+      }
+      return v;
+    }
+
+    return jsonEncode(normalize(value));
+  }
+
+  Future<void> toggleArEnabled() async {
+    isArEnabled.toggle();
+    await applyLivekitArSettings();
+  }
+
+  Future<void> toggleSticker() async {
+    isStickerEnabled.toggle();
+    await applyLivekitArSettings();
+  }
+
+  Future<void> setArBeautySmooth(double v) async {
+    arBeautySmooth.value = v.clamp(0.0, 1.0);
+    await applyLivekitArSettings();
+  }
+
+  Future<void> setArBeautyBrighten(double v) async {
+    arBeautyBrighten.value = v.clamp(0.0, 1.0);
+    await applyLivekitArSettings();
+  }
+
+  Future<void> setArBeautySharpen(double v) async {
+    arBeautySharpen.value = v.clamp(0.0, 1.0);
+    await applyLivekitArSettings();
+  }
+
+  Future<void> setArBeautyGlow(double v) async {
+    arBeautyGlow.value = v.clamp(0.0, 1.0);
+    await applyLivekitArSettings();
+  }
+
+  Future<void> setArColorExposure(double v) async {
+    arColorExposure.value = v.clamp(-2.0, 2.0);
+    await applyLivekitArSettings();
+  }
+
+  Future<void> setArColorBrightness(double v) async {
+    arColorBrightness.value = v.clamp(-1.0, 1.0);
+    await applyLivekitArSettings();
+  }
+
+  Future<void> setArColorContrast(double v) async {
+    arColorContrast.value = v.clamp(0.0, 2.0);
+    await applyLivekitArSettings();
+  }
+
+  Future<void> setArColorSaturation(double v) async {
+    arColorSaturation.value = v.clamp(0.0, 2.0);
+    await applyLivekitArSettings();
+  }
+
+  Future<void> setArColorTemperature(double v) async {
+    arColorTemperature.value = v.clamp(-100.0, 100.0);
+    await applyLivekitArSettings();
+  }
+
+  Future<void> setArColorTint(double v) async {
+    arColorTint.value = v.clamp(-100.0, 100.0);
+    await applyLivekitArSettings();
+  }
+
+  Future<void> setArColorHighlights(double v) async {
+    arColorHighlights.value = v.clamp(-100.0, 100.0);
+    await applyLivekitArSettings();
+  }
+
+  Future<void> setArColorShadows(double v) async {
+    arColorShadows.value = v.clamp(-100.0, 100.0);
+    await applyLivekitArSettings();
+  }
+
+  Future<void> setArColorSharpen(double v) async {
+    arColorSharpen.value = v.clamp(0.0, 1.0);
+    await applyLivekitArSettings();
+  }
+
+  Future<void> setArColorFade(double v) async {
+    arColorFade.value = v.clamp(0.0, 1.0);
+    await applyLivekitArSettings();
+  }
+
+  Future<void> setArMakeupSkinSmooth(double v) async {
+    arMakeupSkinSmooth.value = v.clamp(0.0, 1.0);
+    await applyLivekitArSettings();
+  }
+
+  Future<void> setArMakeupFaceTone(double v) async {
+    arMakeupFaceTone.value = v.clamp(0.0, 1.0);
+    await applyLivekitArSettings();
+  }
+
+  Future<void> setArMakeupLipsColor(double v) async {
+    arMakeupLipsColor.value = v.clamp(0.0, 1.0);
+    await applyLivekitArSettings();
+  }
+
+  Future<void> setArMakeupBlush(double v) async {
+    arMakeupBlush.value = v.clamp(0.0, 1.0);
+    await applyLivekitArSettings();
+  }
+
+  Future<void> setArMakeupHighlight(double v) async {
+    arMakeupHighlight.value = v.clamp(0.0, 1.0);
+    await applyLivekitArSettings();
+  }
+
+  Future<void> setArMakeupEyeBrightness(double v) async {
+    arMakeupEyeBrightness.value = v.clamp(0.0, 1.0);
+    await applyLivekitArSettings();
+  }
+
+  Future<void> setArMakeupSoftContour(double v) async {
+    arMakeupSoftContour.value = v.clamp(0.0, 1.0);
+    await applyLivekitArSettings();
+  }
+
+  Future<void> resetArBeautyDefaults() async {
+    arBeautySmooth.value = _defaultBeautySmooth;
+    arBeautyBrighten.value = _defaultBeautyBrighten;
+    arBeautySharpen.value = _defaultBeautySharpen;
+    arBeautyGlow.value = _defaultBeautyGlow;
+    await applyLivekitArSettings();
+  }
+
+  Future<void> resetArColorDefaults() async {
+    arColorExposure.value = _defaultColorExposure;
+    arColorBrightness.value = _defaultColorBrightness;
+    arColorContrast.value = _defaultColorContrast;
+    arColorSaturation.value = _defaultColorSaturation;
+    arColorTemperature.value = _defaultColorTemperature;
+    arColorTint.value = _defaultColorTint;
+    arColorHighlights.value = _defaultColorHighlights;
+    arColorShadows.value = _defaultColorShadows;
+    arColorSharpen.value = _defaultColorSharpen;
+    arColorFade.value = _defaultColorFade;
+    await applyLivekitArSettings();
+  }
+
+  Future<void> resetArAllDefaults() async {
+    arFilterPreset.value = _defaultFilterPreset;
+    arFilterLutAssetPath.value = _defaultLutAssetPath;
+    await resetArBeautyDefaults();
+    await resetArColorDefaults();
+  }
+
+  Future<void> setArNormal() async {
+    arFilterPreset.value = 'none';
+    await applyLivekitArSettings();
+  }
+
+  Future<void> cycleArFilterPreset() async {
+    final cur = arFilterPreset.value.trim().toLowerCase();
+    final next = switch (cur) {
+      'none' => 'lut',
+      'lut' => 'none',
+      _ => 'none',
+    };
+    arFilterPreset.value = next;
+    await applyLivekitArSettings();
+  }
+
+  @override
+  void onInit() {
+    super.onInit();
+
+    // Live music: auto-next / repeat when track completes.
+    // Only host is allowed to advance the shared state.
+    try {
+      _liveMusicPlayerStateSub?.cancel();
+    } catch (_) {}
+    _liveMusicPlayerStateSub = liveMusicPlayer.playerStateStream.listen(
+      (ps) async {
+        try {
+          if (!isHost) return;
+          if (!isLiveMusicEnabled) return;
+          if (!isLiveMusicPlaying) return;
+          if (ps.processingState != ProcessingState.completed) return;
+
+          final now = DateTime.now().millisecondsSinceEpoch;
+          if (now - _lastLiveMusicCompleteHandledMs < 1200) return;
+          _lastLiveMusicCompleteHandledMs = now;
+
+          if (isLiveMusicRepeat) {
+            final st = Map<String, dynamic>.from(liveMusicState.value);
+            if (st.isEmpty || st['enabled'] != true) return;
+            st['playing'] = true;
+            st['startedAtMs'] = now;
+            st['startPositionMs'] = 0;
+            st['pausedPositionMs'] = 0;
+            st['updatedAtMs'] = now;
+            st['issuedBy'] = myUserId;
+            await updateLiveStreamData(liveMusicState: st);
+          } else {
+            await nextLiveMusic();
+          }
+        } catch (e, st) {
+          Loggers.error('[LIVE_MUSIC] completion handler failed: $e\n$st');
+        }
+      },
+      onError: (e) {
+        Loggers.error('[LIVE_MUSIC] playerStateStream error: $e');
+      },
+    );
+
+    if (_bootstrapProvider) {
+      _bootstrapProviderAndInit();
+    } else {
+      _ensureLiveKitUserState();
+      listenLiveStreamData();
+      listenUserState();
+      fetchLiveStreamComments();
+      WakelockPlus.enable();
+    }
+  }
+
+  Future<void> _applyRemoteAudioGateForUser(
+    int userId,
+    VideoAudioStatus status,
+  ) async {
+    try {
+      if (userId <= 0) return;
+      // Don't mute my own playback; local publishing is handled via applyLocalAudioGate.
+      if (userId == myUserId) return;
+
+      // In audio room, user should be audible only when seated AND mic status is ON.
+      final shouldMute = status != VideoAudioStatus.on ||
+          (isAudioRoom && !isUserSeated(userId));
+
+      // LiveKit remote track muting handled inside LiveKit screens.
+      // Keep this method for seat-map gating parity.
+      if (shouldMute) {
+        // no-op
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _syncRemoteAudioGates() async {
+    try {
+      if (!isAudioRoom) return;
+      // Apply for all known users so seat-map changes immediately stop audio.
+      for (final s in liveUsersStates) {
+        await _applyRemoteAudioGateForUser(s.userId, s.audioStatus);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> lockAudioSeatAndClear(int seatIndex) async {
+    final myState =
+        liveUsersStates.firstWhereOrNull((e) => e.userId == myUserId);
+    final isPrivileged = isHost || myState?.type == LivestreamUserType.coHost;
+    if (!isPrivileged) return;
+    if (!isAudioRoom) return;
+    final count = liveData.value.audioSeatCount.clamp(1, 10);
+    if (seatIndex < 0 || seatIndex >= count) return;
+
+    final currentMap = Map<String, dynamic>.from(liveData.value.audioSeatMap);
+    final existing = currentMap['$seatIndex'];
+    final existingId = (existing is int) ? existing : int.tryParse('$existing');
+    if (existingId != null && existingId > 0) {
+      // Kick occupant from seat first.
+      currentMap.remove('$seatIndex');
+    }
+    currentMap['$seatIndex'] = lockedSeatValue;
+    await updateLiveStreamData(audioSeatMap: currentMap);
+
+    if (existingId != null && existingId == myUserId) {
+      await applyLocalAudioGate();
+    }
+  }
+
+  Future<void> _forceExitBecauseKicked() async {
+    if (_isExiting) return;
+    _isExiting = true;
+    try {
+      liveStreamDocListener?.cancel();
+      liveStreamUserStatesListener?.cancel();
+      liveStreamCommentsListener?.cancel();
+    } catch (_) {}
+
+    try {
+      await livekitDisconnect?.call();
+    } catch (_) {}
+
+    try {
+      allowRoutePop.value = true;
+      if (Get.key.currentState?.canPop() ?? false) {
+        Get.back();
+      }
+    } catch (_) {}
+  }
+
+  void onExitButtonTap() {
+    HapticManager.shared.light();
+    if (Get.isBottomSheetOpen == true || Get.isDialogOpen == true) return;
+
+    final ctx = Get.context;
+    if (ctx == null) return;
+
+    final bool showStop = isHost;
+    final title = LKey.exitLiveStreamTitle.tr;
+
+    Get.bottomSheet(
+      Wrap(
+        children: [
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+            decoration: BoxDecoration(
+              color: whitePure(ctx),
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(20)),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  title,
+                  style: TextStyleCustom.unboundedSemiBold600(
+                    fontSize: 16,
+                    color: textDarkGrey(ctx),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                if (showStop) ...[
+                  TextButtonCustom(
+                    title: 'Stop Live',
+                    onTap: () {
+                      try {
+                        Navigator.of(ctx, rootNavigator: true).pop();
+                      } catch (_) {}
+                      onStopButtonTap();
+                    },
+                    backgroundColor: ColorRes.likeRed.withValues(alpha: .12),
+                    titleColor: ColorRes.likeRed,
+                  ),
+                  const SizedBox(height: 10),
+                ],
+                TextButtonCustom(
+                  title: 'Exit',
+                  onTap: () async {
+                    try {
+                      Navigator.of(ctx, rootNavigator: true).pop();
+                    } catch (_) {}
+                    await exitLiveOnly();
+                  },
+                  backgroundColor: Colors.black.withValues(alpha: .08),
+                  titleColor: textDarkGrey(ctx),
+                ),
+                const SizedBox(height: 10),
+                TextButtonCustom(
+                  title: 'Cancel',
+                  onTap: () {
+                    try {
+                      Navigator.of(ctx, rootNavigator: true).pop();
+                    } catch (_) {}
+                  },
+                  backgroundColor: Colors.black.withValues(alpha: .06),
+                  titleColor: textLightGrey(ctx),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+      isScrollControlled: true,
+    );
+  }
+
+  Future<void> exitLiveOnly() async {
+    _isExiting = true;
+    try {
+      // If host/cohost is leaving, stop live music so it doesn't continue for audience.
+      try {
+        final myState = liveUsersStates.firstWhereOrNull((e) => e.userId == myUserId);
+        final isPrivileged = isHost || myState?.type == LivestreamUserType.coHost;
+        if (isPrivileged && isLiveMusicEnabled) {
+          await stopLiveMusic();
+        }
+      } catch (_) {}
+
+      // Mark state as LEFT for realtime UI on other devices
+      updateUserStateToFirestore(
+        myUserId,
+        type: LivestreamUserType.left,
+        audioStatus: VideoAudioStatus.offByMe,
+        videoStatus: VideoAudioStatus.offByMe,
+      );
+
+      // If cohost exits, do NOT remove cohost role.
+      // Cohost rights stay until host removes/kicks or live ends.
+      if (liveData.value.coHostIds?.contains(myUserId) ?? false) {
+        try {
+          // Stop local publishing if any (do not touch Firestore coHostIds).
+          await livekitSetCameraEnabled?.call(false);
+          await livekitSetMicrophoneEnabled?.call(false);
+        } catch (_) {}
+      }
+
+      // Clear seat if seated
+      await clearSeatForUserLatest(myUserId);
+
+      // Disconnect without deleting livestream doc
+      await livekitDisconnect?.call();
+    } catch (_) {}
+
+    // Stop listeners to avoid re-assigning seats during teardown
+    try {
+      liveStreamDocListener?.cancel();
+      liveStreamUserStatesListener?.cancel();
+      liveStreamCommentsListener?.cancel();
+    } catch (_) {}
+
+    try {
+      // Host screen uses PopScope(canPop:false). Temporarily allow pop for Exit.
+      allowRoutePop.value = true;
+      Get.back();
+    } catch (_) {}
+  }
+
+  Future<void> _forceExitBecauseLiveStopped() async {
+    if (_handledLiveDeleted) return;
+    _handledLiveDeleted = true;
+    _isExiting = true;
+    try {
+      liveStreamDocListener?.cancel();
+      liveStreamUserStatesListener?.cancel();
+      liveStreamCommentsListener?.cancel();
+    } catch (_) {}
+
+    try {
+      timer?.cancel();
+      minViewerTimeoutTimer?.cancel();
+    } catch (_) {}
+
+    try {
+      await livekitDisconnect?.call();
+    } catch (_) {}
+
+    try {
+      allowRoutePop.value = true;
+      // Leave current screen immediately for all roles (host/cohost/audience)
+      if (Get.key.currentState?.canPop() ?? false) {
+        Get.back();
+      }
+    } catch (_) {}
+  }
+
+  void setSpeakingUsersFromIdentities(Iterable<dynamic> identities) {
+    final next = <int>{};
+    for (final id in identities) {
+      final parsed = int.tryParse('$id');
+      if (parsed != null && parsed > 0) {
+        next.add(parsed);
+      }
+    }
+    speakingUserIds.assignAll(next);
+  }
+
+  Future<void> _ensureLiveKitUserState() async {
+    try {
+      final user = SessionManager.instance.getUser();
+      if (user == null) return;
+
+      final userId = user.id ?? -1;
+      if (userId <= 0) return;
+
+      final userRef = liveStreamUsersRef.doc('$userId');
+      if (!(await userRef.get()).exists) {
+        await userRef.set(user.appUser.toJson());
+      }
+
+      final stateRef = liveStreamUserStatesRef.doc('$userId');
+      final snap = await stateRef
+          .withConverter(
+            fromFirestore: (snapshot, _) =>
+                LivestreamUserState.fromJson(snapshot.data()!),
+            toFirestore: (value, _) => value.toJson(),
+          )
+          .get();
+
+      final isCohostByStream =
+          (liveData.value.coHostIds ?? const []).contains(userId);
+      final targetType = isHost
+          ? LivestreamUserType.host
+          : (isCohostByStream
+              ? LivestreamUserType.coHost
+              : LivestreamUserType.audience);
+      if (!snap.exists) {
+        final initialState = user.streamState(
+            time: DateTime.now().millisecondsSinceEpoch, stateType: targetType);
+        await stateRef.set(initialState.toJson());
+        if (!isHost) {
+          _sendCommentToFirestore(type: LivestreamCommentType.joined);
+        }
+      } else {
+        final existing = snap.data();
+        await updateUserStateToFirestore(
+          userId,
+          type: targetType,
+          audioStatus: existing?.audioStatus,
+          videoStatus: existing?.videoStatus,
+        );
+      }
+    } catch (e) {
+      Loggers.error('[LIVEKIT] ensure user state failed: $e');
+    }
+  }
+
+  Future<void> _startLiveKit() async {
+    final wsUrl = (setting?.livekitWsUrl ?? '').trim();
+    if (wsUrl.isEmpty) {
+      showSnackBar('LiveKit is selected but not configured');
+      return;
+    }
+
+    final user = SessionManager.instance.getUser();
+    final userId = user?.id ?? -1;
+    if (user == null || userId <= 0) {
+      showSnackBar('User not found');
+      return;
+    }
+
+    final roomName =
+        (liveData.value.roomID ?? liveData.value.hostId?.toString() ?? '')
+            .trim();
+    if (roomName.isEmpty) {
+      showSnackBar('Invalid live room');
+      return;
+    }
+
+    showLoader();
+    try {
+      final tokenResp = await LiveKitService.instance.generateToken(
+        roomName: roomName,
+        userIdentity: userId.toString(),
+        userName: (user.username ?? user.fullname ?? '').toString(),
+      );
+
+      if (tokenResp == null || tokenResp.token.trim().isEmpty) {
+        showSnackBar('Failed to generate LiveKit token');
+        return;
+      }
+
+      final url =
+          tokenResp.livekitUrl.isNotEmpty ? tokenResp.livekitUrl : wsUrl;
+      if (isHost) {
+        Get.off(() => LiveKitHostScreen(
+              livestream: liveData.value,
+              url: url,
+              token: tokenResp.token,
+            ));
+      } else {
+        Get.off(() => LiveKitAudienceScreen(
+              livestream: liveData.value,
+              url: url,
+              token: tokenResp.token,
+            ));
+      }
+    } catch (e) {
+      Loggers.error('[LIVEKIT] start failed: $e');
+      showSnackBar('LiveKit error');
+    } finally {
+      stopLoader();
+    }
+  }
+
+  Future<void> _bootstrapProviderAndInit() async {
+    if (liveData.value.isDummyLive == 1) {
+      initVideoPlayer();
+      listenLiveStreamData();
+      listenUserState();
+      fetchLiveStreamComments();
+      WakelockPlus.enable();
+      return;
+    }
+
+    var provider =
+        await ConfigService.instance.getLiveProvider(forceRefresh: true);
+    if (provider.isEmpty) {
+      provider = (setting?.liveProvider ?? '').trim().toLowerCase();
+    }
+    if (provider.isEmpty) {
+      provider = 'livekit';
+    }
+    if (provider == 'livekit') {
+      await _startLiveKit();
+      return;
+    }
+
+    // If backend returns an unexpected provider, fallback to LiveKit.
+    await _startLiveKit();
+  }
+
+  @override
+  void onClose() {
+    _stopLiveMusicProgressPolling();
+    try {
+      _liveMusicPlayerStateSub?.cancel();
+    } catch (_) {}
+    _liveMusicPlayerStateSub = null;
+    if (_useNativeLiveMusicMixing && isHost) {
+      webrtc_audio.NativeAudioManagement.liveMusicMixStop();
+    }
+    super.onClose();
+
+    textCommentController.dispose();
+    textCommentFocusNode.dispose();
+    liveCommentRecorder?.dispose();
+
+    WakelockPlus.disable();
+    timer?.cancel();
+    minViewerTimeoutTimer?.cancel();
+    videoPlayerController.value?.dispose();
+    liveStreamUserStatesListener?.cancel();
+    liveStreamCommentsListener?.cancel();
+    liveStreamDocListener?.cancel();
+    countdownPlayer.dispose();
+    winAudioPlayer.dispose();
+    liveMusicPlayer.dispose();
+    livekitDisconnect?.call();
+  }
+
+  void initVideoPlayer() async {
+    final url = liveData.value.dummyUserLink ?? '';
+    if (url.isEmpty) return;
+
+    // Dispose old controller if exists to avoid memory leak
+    await videoPlayerController.value?.dispose();
+
+    final controller = VideoPlayerController.networkUrl(Uri.parse(url));
+    isPlayerMute.value = false;
+
+    try {
+      await controller.initialize();
+      controller
+        ..setLooping(true)
+        ..play();
+
+      videoPlayerController.value = controller;
+      videoPlayerController.value?.setLooping(true);
+    } on PlatformException catch (e) {
+      showSnackBar(e.message);
+      Loggers.error(e);
+    }
+  }
+
+  void initAudioPlayer() {
+    countdownPlayer.setAsset(AssetRes.endCountdown);
+    battleStartPlayer.setAsset(AssetRes.battleStart);
+    winAudioPlayer.setAsset(AssetRes.winSound);
+  }
+
+  Future<void> updateLiveStreamData({
+    BattleType? battleType,
+    LivestreamType? type,
+    int? battleCreatedAt,
+    int? battleDuration,
+    int watchingCount = 0,
+    FieldValue? coHostId,
+    int? liveLayoutSlots,
+    String? liveLayoutMode,
+    int? battleOpponentId,
+    int? audioSeatCount,
+    Map<String, dynamic>? audioSeatMap,
+    Map<String, dynamic>? liveMusicState,
+    List<int>? liveMusicControlCohostIds,
+  }) async {
+    bool isExist = (await liveStreamDocRef.get()).exists;
+    if (!isExist) return;
+
+    liveStreamDocRef.update({
+      if (battleType != null) FirebaseConst.battleType: battleType.value,
+      if (type != null) FirebaseConst.type: type.value,
+      if (battleCreatedAt != null)
+        FirebaseConst.battleCreatedAt: battleCreatedAt,
+      if (battleDuration != null) FirebaseConst.battleDuration: battleDuration,
+      if (watchingCount != 0)
+        FirebaseConst.watchingCount: FieldValue.increment(watchingCount),
+      if (coHostId != null) FirebaseConst.coHostIds: coHostId,
+      if (liveLayoutSlots != null)
+        FirebaseConst.liveLayoutSlots: liveLayoutSlots,
+      if (liveLayoutMode != null) FirebaseConst.liveLayoutMode: liveLayoutMode,
+      if (battleOpponentId != null)
+        FirebaseConst.battleOpponentId: battleOpponentId,
+      if (audioSeatCount != null) FirebaseConst.audioSeatCount: audioSeatCount,
+      if (audioSeatMap != null) FirebaseConst.audioSeatMap: audioSeatMap,
+      if (liveMusicState != null) FirebaseConst.liveMusicState: liveMusicState,
+      if (liveMusicControlCohostIds != null)
+        FirebaseConst.liveMusicControlCohosts: liveMusicControlCohostIds,
+    });
+  }
+
+  bool get isAudioRoom =>
+      (liveData.value.liveLayoutMode.toLowerCase() == 'audio');
+
+  bool isUserSeated(int userId) {
+    final map = liveData.value.audioSeatMap;
+    for (final v in map.values) {
+      if (v is int && v == userId) return true;
+      final parsed = int.tryParse('$v');
+      if (parsed != null && parsed == userId) return true;
+    }
+    return false;
+  }
+
+  int? findAudioSeatIndexForUser(int userId) {
+    final map = liveData.value.audioSeatMap;
+    for (final entry in map.entries) {
+      final v = entry.value;
+      final parsed = (v is int) ? v : int.tryParse('$v');
+      if (parsed == userId) {
+        return int.tryParse(entry.key);
+      }
+    }
+    return null;
+  }
+
+  int? _findFirstEmptySeatIndexForUser(int userId) {
+    final count = liveData.value.audioSeatCount.clamp(1, 10);
+    final currentMap = Map<String, dynamic>.from(liveData.value.audioSeatMap);
+
+    final targetState =
+        liveUsersStates.firstWhereOrNull((e) => e.userId == userId);
+    final isCohost = targetState?.type == LivestreamUserType.coHost;
+
+    for (int i = 0; i < count; i++) {
+      if (isCohost == true && i == 0) continue; // cohost cannot take seat #1
+      final v = currentMap['$i'];
+      if (v == lockedSeatValue) continue;
+      final parsed = (v is int) ? v : int.tryParse('$v');
+      final isOccupied = parsed != null && parsed > 0;
+      if (!isOccupied) return i;
+    }
+    return null;
+  }
+
+  Future<void> toggleSeatForUser(int userId) async {
+    if (!isAudioRoom) return;
+
+    // Normal audience should not auto-sit (even for self). They must request.
+    if (userId == myUserId) {
+      final myState =
+          liveUsersStates.firstWhereOrNull((e) => e.userId == myUserId);
+      final isPrivileged = isHost || myState?.type == LivestreamUserType.coHost;
+      if (!isPrivileged) {
+        onVideoRequestSend(liveData.value);
+        return;
+      }
+    }
+
+    final currentSeatIndex = findAudioSeatIndexForUser(userId);
+    if (currentSeatIndex != null) {
+      await clearAudioSeat(currentSeatIndex);
+      return;
+    }
+
+    final seatIndex = _findFirstEmptySeatIndexForUser(userId);
+    if (seatIndex == null) {
+      showSnackBar('Koi seat empty nahi hai');
+      return;
+    }
+
+    await assignAudioSeat(seatIndex: seatIndex, userId: userId);
+  }
+
+  Future<void> applyLocalAudioGate() async {
+    try {
+      final forcePublishForMusic = _useNativeLiveMusicMixing &&
+          isHost &&
+          isLiveMusicEnabled &&
+          isLiveMusicPlaying;
+
+      final state =
+          liveUsersStates.firstWhereOrNull((e) => e.userId == myUserId);
+      if (state == null) {
+        if (forcePublishForMusic) {
+          await livekitSetMicrophoneEnabled?.call(true);
+          final now = DateTime.now().millisecondsSinceEpoch;
+          if (now - _lastAudioGateLogMs > 2000) {
+            _lastAudioGateLogMs = now;
+            Loggers.info(
+                '[LIVEKIT] audioGate fallback: state=null forcePublish=$forcePublishForMusic');
+          }
+        }
+        return;
+      }
+
+      final isMicOn = state.audioStatus == VideoAudioStatus.on;
+
+      // Video room: only host/cohost can publish mic (prevents audience voice leak).
+      // Audio room: anyone seated can publish mic (host/cohost/audience), obeying audioStatus.
+      final isHostOrCohost = state.type == LivestreamUserType.host ||
+          state.type == LivestreamUserType.coHost;
+
+      // If host is playing live music (native mixing), keep mic published so frames are sent.
+      final shouldPublish = forcePublishForMusic
+          ? true
+          : (!isAudioRoom
+              ? (isHostOrCohost && isMicOn)
+              : (isUserSeated(myUserId) && isMicOn));
+
+      final now = DateTime.now().millisecondsSinceEpoch;
+      if (_lastLocalMicPublish != shouldPublish ||
+          now - _lastAudioGateLogMs > 3000) {
+        _lastLocalMicPublish = shouldPublish;
+        _lastAudioGateLogMs = now;
+        Loggers.info(
+            '[LIVEKIT] audioGate publish=$shouldPublish micOn=$isMicOn forceMusic=$forcePublishForMusic audioRoom=$isAudioRoom seated=${isUserSeated(myUserId)}');
+      }
+
+      // If we are force-publishing for music while user mic is OFF, silence mic contribution.
+      if (_useNativeLiveMusicMixing && isHost && isLiveMusicEnabled) {
+        final micVol = isMicOn ? 1.0 : 0.0;
+        try {
+          await webrtc_audio.NativeAudioManagement.liveMusicMixSetMicVolume(
+              micVol);
+        } catch (_) {}
+      }
+
+      await livekitSetMicrophoneEnabled?.call(shouldPublish);
+    } catch (_) {}
+  }
+
+  Future<void> _applyLocalAudioGateForStatus(VideoAudioStatus status) async {
+    try {
+      final isMicOn = status == VideoAudioStatus.on;
+      final forcePublishForMusic = _useNativeLiveMusicMixing &&
+          isHost &&
+          isLiveMusicEnabled &&
+          isLiveMusicPlaying;
+
+      final state =
+          liveUsersStates.firstWhereOrNull((e) => e.userId == myUserId);
+      if (state == null) {
+        if (forcePublishForMusic) {
+          await livekitSetMicrophoneEnabled?.call(true);
+        }
+        return;
+      }
+
+      final isHostOrCohost = state.type == LivestreamUserType.host ||
+          state.type == LivestreamUserType.coHost;
+
+      final shouldPublish = forcePublishForMusic
+          ? true
+          : (!isAudioRoom
+              ? (isHostOrCohost && isMicOn)
+              : (isUserSeated(myUserId) && isMicOn));
+
+      if (_useNativeLiveMusicMixing && isHost && isLiveMusicEnabled) {
+        final micVol = isMicOn ? 1.0 : 0.0;
+        try {
+          await webrtc_audio.NativeAudioManagement.liveMusicMixSetMicVolume(
+              micVol);
+        } catch (_) {}
+      }
+
+      await livekitSetMicrophoneEnabled?.call(shouldPublish);
+    } catch (_) {}
+  }
+
+  void setAudioSeatCount(int count) {
+    final safe = count.clamp(1, 10);
+    final currentMap = Map<String, dynamic>.from(liveData.value.audioSeatMap);
+
+    // Remove assignments outside new range
+    currentMap.removeWhere((k, v) {
+      final idx = int.tryParse(k) ?? -1;
+      return idx < 0 || idx >= safe;
+    });
+
+    updateLiveStreamData(audioSeatCount: safe, audioSeatMap: currentMap);
+  }
+
+  Future<void> assignAudioSeat({
+    required int seatIndex,
+    required int userId,
+  }) async {
+    final count = liveData.value.audioSeatCount.clamp(1, 10);
+    if (seatIndex < 0 || seatIndex >= count) return;
+
+    // Co-host cannot take seat NO.1 (index 0)
+    final myState = liveUsersStates.firstWhereOrNull((e) => e.userId == userId);
+    final isCohost = myState?.type == LivestreamUserType.coHost;
+    if (isCohost && seatIndex == 0) {
+      showSnackBar('Co-host seat NO.1 par nahi baith sakta');
+      return;
+    }
+
+    final currentMap = Map<String, dynamic>.from(liveData.value.audioSeatMap);
+
+    // Don't allow assignment on locked seat
+    if (currentMap['$seatIndex'] == lockedSeatValue) {
+      showSnackBar('Seat locked hai');
+      return;
+    }
+
+    // Ensure user occupies only one seat
+    currentMap.removeWhere((k, v) => (v is int) && v == userId);
+
+    // Assign
+    currentMap['$seatIndex'] = userId;
+
+    await updateLiveStreamData(audioSeatMap: currentMap);
+
+    if (userId == myUserId) {
+      // optimistic mic gating without waiting for snapshot
+      applyLocalAudioGate();
+    }
+  }
+
+  Future<void> lockAudioSeat(int seatIndex) async {
+    final myState =
+        liveUsersStates.firstWhereOrNull((e) => e.userId == myUserId);
+    final isPrivileged = isHost || myState?.type == LivestreamUserType.coHost;
+    if (!isPrivileged) return;
+    final count = liveData.value.audioSeatCount.clamp(1, 10);
+    if (seatIndex < 0 || seatIndex >= count) return;
+
+    final currentMap = Map<String, dynamic>.from(liveData.value.audioSeatMap);
+    final existing = currentMap['$seatIndex'];
+    if (existing is int && existing > 0) {
+      showSnackBar('Pehle seat empty karo');
+      return;
+    }
+    currentMap['$seatIndex'] = lockedSeatValue;
+    await updateLiveStreamData(audioSeatMap: currentMap);
+  }
+
+  Future<void> unlockAudioSeat(int seatIndex) async {
+    final myState =
+        liveUsersStates.firstWhereOrNull((e) => e.userId == myUserId);
+    final isPrivileged = isHost || myState?.type == LivestreamUserType.coHost;
+    if (!isPrivileged) return;
+    final currentMap = Map<String, dynamic>.from(liveData.value.audioSeatMap);
+    if (currentMap['$seatIndex'] == lockedSeatValue) {
+      currentMap.remove('$seatIndex');
+      await updateLiveStreamData(audioSeatMap: currentMap);
+    }
+  }
+
+  Future<void> clearAudioSeat(int seatIndex) async {
+    final currentMap = Map<String, dynamic>.from(liveData.value.audioSeatMap);
+    final previous = currentMap['$seatIndex'];
+    currentMap.remove('$seatIndex');
+    await updateLiveStreamData(audioSeatMap: currentMap);
+
+    final prevParsed = (previous is int) ? previous : int.tryParse('$previous');
+    if (prevParsed != null && prevParsed == myUserId) {
+      // seat se utarte hi mic publish off
+      applyLocalAudioGate();
+    }
+  }
+
+  final RxInt selectedBattleOpponentId = 0.obs;
+
+  void setLiveLayout({required int slots, required String mode}) {
+    final safeSlots = slots.clamp(1, 8);
+    updateLiveStreamData(liveLayoutSlots: safeSlots, liveLayoutMode: mode);
+    if (isHost && mode.toLowerCase() == 'audio') {
+      // host should sit on NO.1 by default
+      ensureHostDefaultSeat();
+    }
+  }
+
+  void setBattleOpponent(int userId) {
+    selectedBattleOpponentId.value = userId;
+  }
+
+  void applyBattleFocus() {
+    final opponentId = selectedBattleOpponentId.value;
+    if (opponentId <= 0) return;
+
+    // Turn off video for non-opponent cohosts (host keeps control)
+    final cohosts = liveData.value.coHostIds ?? const [];
+    for (final id in cohosts) {
+      if (id == opponentId) continue;
+      updateUserStateToFirestore(
+        id,
+        videoStatus: VideoAudioStatus.offByHost,
+      );
+    }
+  }
+
+  void handleRequestResponse({
+    required AppUser? user,
+    required bool isRefused,
+    LivestreamComment? comment,
+  }) {
+    final userId = user?.userId;
+    if (userId == null) return;
+
+    // Only privileged users can accept/refuse requests.
+    final myState =
+        liveUsersStates.firstWhereOrNull((e) => e.userId == myUserId);
+    final isPrivileged = myState?.type == LivestreamUserType.host ||
+        myState?.type == LivestreamUserType.coHost;
+    if (!isPrivileged) return;
+
+    // Update user state based on refusal
+    // Request is only for seat permission, not for making cohost.
+    updateUserStateToFirestore(
+      userId,
+      type: LivestreamUserType.audience,
+    );
+
+    // Audio room: if accepted, move user to a seat (they cannot auto-sit).
+    // Seat NO.1 (index 0) stays reserved for host.
+    if (!isRefused && isAudioRoom) {
+      try {
+        final count = liveData.value.audioSeatCount.clamp(1, 10);
+        final map = Map<String, dynamic>.from(liveData.value.audioSeatMap);
+        int? seatIndex;
+        for (int i = 1; i < count; i++) {
+          final v = map['$i'];
+          if (v == lockedSeatValue) continue;
+          final parsed = (v is int) ? v : int.tryParse('$v');
+          final occupied = parsed != null && parsed > 0;
+          if (!occupied) {
+            seatIndex = i;
+            break;
+          }
+        }
+        if (seatIndex != null) {
+          assignAudioSeat(seatIndex: seatIndex, userId: userId);
+        } else {
+          showSnackBar('Koi seat empty nahi hai');
+        }
+      } catch (_) {}
+    }
+
+    // Determine the comment to delete
+    final commentToDelete = comment ??
+        comments.firstWhereOrNull((element) =>
+            element.senderId == userId &&
+            element.commentType == LivestreamCommentType.request);
+
+    if (commentToDelete != null) {
+      liveStreamCommentsRef.doc(commentToDelete.id.toString()).delete();
+    }
+  }
+
+  Future<void> deleteStreamOnFirebase() async {
+    final String? roomId = liveData.value.roomID;
+
+    if (roomId == null) {
+      Loggers.error('Room ID is null. Cannot stop live stream.');
+      return;
+    }
+
+    Loggers.info('Stopping live stream Room : $roomId');
+
+    try {
+      // Get all users in the livestream and delete them
+      QuerySnapshot usersSnapshot = await liveStreamUserStatesRef.get();
+
+      WriteBatch batch = db.batch();
+
+      for (var doc in usersSnapshot.docs) {
+        batch.delete(doc.reference);
+      }
+
+      Loggers.info(
+          'Deleted ${usersSnapshot.docs.length} livestream users_state.');
+
+      // Get all Comments in the livestream and delete them
+      QuerySnapshot commentsSnapshot = await liveStreamCommentsRef.get();
+
+      for (var doc in commentsSnapshot.docs) {
+        batch.delete(doc.reference);
+      }
+
+      Loggers.info(
+          'Deleted ${commentsSnapshot.docs.length} livestream comments.');
+
+      // Delete the main live stream document
+      batch.delete(liveStreamDocRef);
+
+      // Commit batch delete
+      await batch.commit();
+      Loggers.success(
+          'livestream , users_states , comments  deleted from Firestore.');
+    } catch (e, stackTrace) {
+      Loggers.error('Failed to stop live stream: $e');
+      Loggers.error('StackTrace: $stackTrace');
+    }
+  }
+
+  void listenLiveStreamData() {
+    if (isCall) return; // Skip timeout/logic for calls
+    int likeCount = liveData.value.likeCount ?? 0;
+    // liveStreamDocListener?.cancel();
+    liveStreamDocListener = liveStreamDocRef.snapshots().listen(
+      (event) async {
+        if (!event.exists) {
+          // Host pressed Stop Live (or livestream deleted). Everyone must leave.
+          await _forceExitBecauseLiveStopped();
+          return;
+        }
+
+        final data = event.data() as Map<String, dynamic>?;
+        if (data == null) return;
+        final stream = Livestream.fromJson(data);
+
+        if (stream.battleType == BattleType.initiate) {
+          selectedBattleOpponentId.value = 0;
+          timer?.cancel();
+          remainingBattleSeconds.value =
+              Duration(minutes: stream.battleDuration).inSeconds;
+          countdownPlayer.pause();
+        }
+
+        if (stream.battleType == BattleType.waiting) {
+          totalBattleSecond =
+              Duration(minutes: stream.battleDuration).inSeconds;
+        }
+
+        // Sync battle opponent from Firestore
+        if ((stream.battleOpponentId) > 0) {
+          selectedBattleOpponentId.value = stream.battleOpponentId;
+        }
+
+        // Update LiveData
+        liveData.value = stream;
+
+        await _syncLiveMusicFromSnapshotData(data);
+
+        // Apply focus during PK/battle (host side)
+        if (isHost &&
+            (stream.battleType == BattleType.waiting ||
+                stream.battleType == BattleType.running) &&
+            selectedBattleOpponentId.value > 0) {
+          applyBattleFocus();
+        }
+
+        // Seat map changes should immediately gate mic publish for audio rooms.
+        applyLocalAudioGate();
+
+        // Also gate remote play streams in audio rooms (seat + mic status).
+        await _syncRemoteAudioGates();
+
+        // If host is in audio mode, ensure host occupies seat NO.1
+        ensureHostDefaultSeat();
+
+        // Trigger like animation if changed
+        final newLikeCount = stream.likeCount ?? 0;
+        if (likeCount != newLikeCount) {
+          onLikeTap?.call();
+          likeCount = newLikeCount;
+        }
+      },
+      onError: (error) =>
+          Loggers.error('Error listening to livestream: $error'),
+    );
+  }
+
+  Future<void> clearSeatForUser(int userId) async {
+    if (!isAudioRoom) return;
+    final count = liveData.value.audioSeatCount.clamp(1, 10);
+    final currentMap = Map<String, dynamic>.from(liveData.value.audioSeatMap);
+    bool changed = false;
+    for (int i = 0; i < count; i++) {
+      final v = currentMap['$i'];
+      final parsed = (v is int) ? v : int.tryParse('$v');
+      if (parsed != null && parsed == userId) {
+        currentMap.remove('$i');
+        changed = true;
+      }
+    }
+    if (changed) {
+      await updateLiveStreamData(audioSeatMap: currentMap);
+      if (userId == myUserId) {
+        applyLocalAudioGate();
+      }
+    }
+  }
+
+  Future<void> clearSeatForUserLatest(int userId) async {
+    try {
+      final snap = await liveStreamDocRef.get();
+      if (!snap.exists) return;
+      final data = snap.data() as Map<String, dynamic>?;
+      if (data == null) return;
+
+      final mode =
+          (data[FirebaseConst.liveLayoutMode] ?? liveData.value.liveLayoutMode)
+              .toString()
+              .trim()
+              .toLowerCase();
+      if (mode != 'audio') return;
+
+      final seatCountRaw = data[FirebaseConst.audioSeatCount];
+      final seatCount = (seatCountRaw is int)
+          ? seatCountRaw
+          : int.tryParse('$seatCountRaw') ?? liveData.value.audioSeatCount;
+      final count = seatCount.clamp(1, 10);
+
+      final rawMap = data[FirebaseConst.audioSeatMap];
+      final currentMap = (rawMap is Map)
+          ? Map<String, dynamic>.from(rawMap)
+          : Map<String, dynamic>.from(liveData.value.audioSeatMap);
+
+      bool changed = false;
+      for (int i = 0; i < count; i++) {
+        final v = currentMap['$i'];
+        final parsed = (v is int) ? v : int.tryParse('$v');
+        if (parsed != null && parsed == userId) {
+          currentMap.remove('$i');
+          changed = true;
+        }
+      }
+      if (changed) {
+        await updateLiveStreamData(audioSeatMap: currentMap);
+        if (userId == myUserId) {
+          applyLocalAudioGate();
+        }
+      }
+    } catch (_) {}
+  }
+
+  void ensureHostDefaultSeat() {
+    if (_isExiting) return;
+    if (!isHost) return;
+    if (!isAudioRoom) return;
+    final currentMap = Map<String, dynamic>.from(liveData.value.audioSeatMap);
+    if (currentMap['0'] == lockedSeatValue) return;
+    final seat0 = currentMap['0'];
+    final seat0Id = (seat0 is int) ? seat0 : int.tryParse('$seat0');
+    if (seat0Id == myUserId) return;
+    // If host already seated elsewhere, do nothing.
+    if (isUserSeated(myUserId)) return;
+    // If seat0 occupied by someone else, do not override.
+    if (seat0Id != null && seat0Id > 0) return;
+    // Assign host to seat 0
+    assignAudioSeat(seatIndex: 0, userId: myUserId);
+  }
+
+  void startBattleWithOpponent(int opponentUserId) {
+    setBattleOpponent(opponentUserId);
+    applyBattleFocus();
+    updateLiveStreamData(
+      battleType: BattleType.waiting,
+      battleDuration: AppRes.battleDurationInMinutes,
+      battleCreatedAt: DateTime.now().millisecondsSinceEpoch,
+      type: LivestreamType.battle,
+      battleOpponentId: opponentUserId,
+    );
+  }
+
+  void listenUserState() {
+    // Cancel any existing listener
+    liveStreamUserStatesListener?.cancel();
+    // Loggers.info('👂 Listening to live stream users state...');
+
+    liveStreamUserStatesListener = liveStreamUserStatesRef
+        .withConverter(
+          fromFirestore: (snapshot, options) {
+            if (!snapshot.exists) return null;
+            return LivestreamUserState.fromJson(snapshot.data()!);
+          },
+          toFirestore: (value, options) {
+            if (value == null) return {};
+            return value.toJson();
+          },
+        )
+        .snapshots()
+        .listen((event) {
+          // Loggers.info(
+          //     '📦 Firestore snapshot received with ${event.docChanges.length} changes');
+
+          for (var change in event.docChanges) {
+            final state = change.doc.data();
+            if (state == null) {
+              // Loggers.warning('⚠️ Null state found in change, skipping...');
+              continue;
+            }
+
+            switch (change.type) {
+              case DocumentChangeType.added:
+                _showJoinStreamSheet(state);
+                liveUsersStates.add(state);
+                // Apply remote mute based on state so new joins respect mic rules.
+                _applyRemoteAudioGateForUser(state.userId, state.audioStatus);
+                // Loggers.info('➕ User added: ${state.userId}');
+                break;
+
+              case DocumentChangeType.modified:
+                LivestreamUserState? oldState =
+                    liveUsersStates.firstWhereOrNull(
+                        (element) => element.userId == state.userId);
+
+                updateStateAction(oldState, state);
+
+                // If someone toggled mic, ensure all listeners hear the change.
+                if (oldState == null ||
+                    oldState.audioStatus != state.audioStatus) {
+                  _applyRemoteAudioGateForUser(state.userId, state.audioStatus);
+                }
+
+                int index =
+                    liveUsersStates.indexWhere((u) => u.userId == state.userId);
+                if (index != -1) {
+                  liveUsersStates[index] = state;
+                } else {
+                  liveUsersStates.add(state);
+                }
+                // Loggers.info('🔁 User modified: ${state.userId}');
+                break;
+
+              case DocumentChangeType.removed:
+                liveUsersStates.removeWhere((u) => u.userId == state.userId);
+                // If user left, ensure their stream isn't kept muted for next reuse.
+                _applyRemoteAudioGateForUser(state.userId, VideoAudioStatus.on);
+                // Loggers.info('➖ User removed: ${state.userId}');
+                break;
+            }
+          }
+          requestList.value = liveUsersStates
+              .where((element) => element.type == LivestreamUserType.requested)
+              .toList();
+          audienceList.value = liveUsersStates
+              .where((element) =>
+                  element.type != LivestreamUserType.host &&
+                  element.type != LivestreamUserType.left)
+              .toList();
+          invitedList.value = liveUsersStates
+              .where((element) => element.type == LivestreamUserType.invited)
+              .toList();
+          coHostList.value = liveUsersStates
+              .where((element) => element.type == LivestreamUserType.coHost)
+              .toList();
+          audienceMemberList.value = liveUsersStates
+              .where((element) =>
+                  element.type != LivestreamUserType.left &&
+                  element.userId != myUserId)
+              .toList();
+
+          // audioStatus changes should immediately reflect in publish state
+          applyLocalAudioGate();
+        }, onError: (error) {
+          if (error is FirebaseException && error.code == 'permission-denied') {
+            Loggers.error(
+                'Firestore permission denied (live user state): $error');
+            liveStreamUserStatesListener?.cancel();
+            return;
+          }
+          Loggers.error('Firestore live user state listener error: $error');
+        });
+  }
+
+  void fetchLiveStreamComments() {
+    Loggers.info('Fetching live stream comments...');
+    liveStreamCommentsListener?.cancel();
+    liveStreamCommentsListener = liveStreamCommentsRef
+        .withConverter(
+          fromFirestore: (snapshot, options) {
+            if (!snapshot.exists) {
+              Loggers.error('No comments found in Firestore.');
+              return null;
+            }
+            return LivestreamComment.fromJson(snapshot.data()!);
+          },
+          toFirestore: (value, options) => value?.toJson() ?? {},
+        )
+        .snapshots()
+        .listen((querySnapshot) {
+      // Loggers.info(
+      //     'Received comment changes: ${querySnapshot.docChanges.length}');
+
+      for (var change in querySnapshot.docChanges) {
+        LivestreamComment? comment = change.doc.data();
+        if (comment == null) {
+          Loggers.error('Null comment received.');
+          continue;
+        }
+
+        switch (change.type) {
+          case DocumentChangeType.added:
+            if (comment.commentType == LivestreamCommentType.request &&
+                !isHost) {
+              continue;
+            }
+            comments.add(comment);
+            // Loggers.info('New comment added: ${comment.toJson()}');
+            break;
+
+          case DocumentChangeType.modified:
+            if (comment.commentType == LivestreamCommentType.request &&
+                !isHost) {
+              return;
+            }
+            int index = comments.indexWhere((c) => c.id == comment.id);
+            if (index != -1) {
+              comments[index] = comment;
+              // Loggers.info('Comment modified: ${comment.toJson()}');
+            }
+            break;
+
+          case DocumentChangeType.removed:
+            comments.removeWhere((c) => c.id == comment.id);
+            // Loggers.info('Comment removed: ${comment.id}');
+            break;
+        }
+      }
+
+      // Assign sender and receiver users to comments
+      for (var comment in comments) {
+        comment.gift =
+            gifts.firstWhereOrNull((gift) => gift.id == comment.giftId);
+      }
+
+      comments.sort((a, b) => (b.id ?? 0).compareTo(a.id ?? 0));
+    }, onError: (error) {
+      if (error is FirebaseException && error.code == 'permission-denied') {
+        Loggers.error('Firestore permission denied (live comments): $error');
+        liveStreamCommentsListener?.cancel();
+        return;
+      }
+      Loggers.error('Firestore live comments listener error: $error');
+    });
+  }
+
+  void toggleCamera() {
+    isFrontCamera = !isFrontCamera;
+    livekitSwitchCamera?.call();
+  }
+
+  void toggleFlipCamera() {
+    isFrontCamera = !isFrontCamera;
+    livekitSwitchCamera?.call();
+  }
+
+  void toggleMic(LivestreamUserState? state) async {
+    if (state?.audioStatus == VideoAudioStatus.offByHost) {
+      return showSnackBar(LKey.theHostHasTurnedOffYourAudio);
+    }
+
+    bool isAudioOn = state?.audioStatus == VideoAudioStatus.on;
+
+    if (isAudioOn) {
+      updateUserStateToFirestore(myUserId,
+          audioStatus: VideoAudioStatus.offByMe);
+      // Apply immediately (don't wait for snapshot).
+      await _applyLocalAudioGateForStatus(VideoAudioStatus.offByMe);
+    } else {
+      updateUserStateToFirestore(myUserId, audioStatus: VideoAudioStatus.on);
+      // Apply immediately (don't wait for snapshot).
+      await _applyLocalAudioGateForStatus(VideoAudioStatus.on);
+    }
+  }
+
+  void moderatorMicToggle(LivestreamUserState state) {
+    if (!isAudioRoom) return;
+    final myState =
+        liveUsersStates.firstWhereOrNull((e) => e.userId == myUserId);
+    final isModerator = isHost || myState?.type == LivestreamUserType.coHost;
+    if (!isModerator) return;
+
+    // Never allow toggling host mic via moderator button.
+    if (state.userId == (liveData.value.hostId ?? -1)) return;
+
+    // Only meaningful for seated users.
+    if (!isUserSeated(state.userId)) return;
+
+    // If user turned off their mic themselves, host/cohost shouldn't override.
+    if (state.audioStatus == VideoAudioStatus.offByMe) {
+      return showSnackBar(LKey.theCoHostHasTurnedOffTheirAudio);
+    }
+
+    updateUserStateToFirestore(
+      state.userId,
+      audioStatus: state.audioStatus == VideoAudioStatus.on
+          ? VideoAudioStatus.offByHost
+          : VideoAudioStatus.on,
+    );
+  }
+
+  // RxBool isVideoOn = true.obs;
+  void toggleVideo(LivestreamUserState? state) async {
+    if (state?.videoStatus == VideoAudioStatus.offByHost) {
+      return showSnackBar(LKey.theHostHasTurnedOffYourVideo.tr);
+    }
+    bool isVideoOn = state?.videoStatus == VideoAudioStatus.on;
+    Loggers.error(isVideoOn);
+    if (isVideoOn) {
+      updateUserStateToFirestore(myUserId,
+          videoStatus: VideoAudioStatus.offByMe);
+      await livekitSetCameraEnabled?.call(false);
+      Loggers.info('HELLO WOW');
+    } else {
+      updateUserStateToFirestore(myUserId, videoStatus: VideoAudioStatus.on);
+      await livekitSetCameraEnabled?.call(true);
+      Loggers.info('HELLO NOTHING');
+    }
+  }
+
+  void toggleStreamAudio(int? streamId) {
+    StreamView? view = streamViews.firstWhereOrNull(
+        (element) => int.tryParse(element.streamId) == streamId);
+
+    view?.isMuted = view.isMuted ? false : true;
+    if (view != null) {
+      streamViews[streamViews.indexWhere(
+          (element) => int.parse(element.streamId) == streamId)] = view;
+      streamViews.refresh();
+    }
+  }
+
+  void onLikeButtonTap() async {
+    bool isExist = (await liveStreamDocRef.get()).exists;
+    if (isExist) {
+      HapticManager.shared.light();
+      liveStreamDocRef
+          .update({FirebaseConst.likeCount: FieldValue.increment(1)});
+    }
+  }
+
+  void onTextCommentSend() {
+    String comment = textCommentController.text.trim();
+    textCommentController.clear();
+    isTextEmpty.value = true;
+    if (comment.isEmpty) return;
+    _sendCommentToFirestore(type: LivestreamCommentType.text, comment: comment);
+  }
+
+  void insertMention(String username) {
+    final safe = username.trim();
+    if (safe.isEmpty) return;
+    textCommentFocusNode.requestFocus();
+    final current = textCommentController.text;
+    final cursor = textCommentController.selection.baseOffset;
+    final mentionText = '@$safe ';
+
+    if (cursor >= 0 && cursor <= current.length) {
+      final before = current.substring(0, cursor);
+      final after = current.substring(cursor);
+      textCommentController.text = '$before$mentionText$after';
+      textCommentController.selection = TextSelection.fromPosition(
+        TextPosition(offset: (before + mentionText).length),
+      );
+    } else {
+      textCommentController.text = '$current$mentionText';
+      textCommentController.selection = TextSelection.fromPosition(
+        TextPosition(offset: textCommentController.text.length),
+      );
+    }
+    isTextEmpty.value = textCommentController.text.trim().isEmpty;
+  }
+
+  void onGifTap() {
+    if (!Get.isRegistered<GifSheetController>()) {
+      Get.put(GifSheetController());
+    }
+    Get.bottomSheet<String?>(const GifSheet(), isScrollControlled: true)
+        .then((value) {
+      if (value == null || value.trim().isEmpty) return;
+      sendGifComment(value.trim());
+    });
+  }
+
+  void sendGifComment(String url) {
+    final u = url.trim();
+    if (u.isEmpty) return;
+    _sendCommentToFirestore(type: LivestreamCommentType.gif, mediaUrl: u);
+  }
+
+  void onVoiceTap() {
+    openLiveCommentAudioRecorder();
+  }
+
+  void openLiveCommentAudioRecorder() async {
+    liveCommentRecorder ??= RecorderController();
+    final recorder = liveCommentRecorder!;
+    final granted = await recorder.checkPermission();
+    if (!granted) {
+      Get.bottomSheet(
+        ConfirmationSheet(
+          title: LKey.enableMicrophoneAccessTitle.tr,
+          description: LKey.enableMicrophoneAccessDescription.tr,
+          onTap: openAppSettings,
+          positiveText: LKey.settings.tr,
+        ),
+        isScrollControlled: true,
+      );
+      return;
+    }
+
+    if (isLiveCommentRecording.value) return;
+    isLiveCommentRecording.value = true;
+
+    String? recordPath;
+    try {
+      final dir = await getTemporaryDirectory();
+      final time = DateTime.now().millisecondsSinceEpoch;
+      recordPath = '${dir.path}/live_comment_$time.m4a';
+    } catch (_) {
+      recordPath = null;
+    }
+
+    recorder.record(
+      path: recordPath,
+      androidEncoder: AndroidEncoder.aac,
+      androidOutputFormat: AndroidOutputFormat.mpeg4,
+      iosEncoder: IosEncoder.kAudioFormatMPEG4AAC,
+    );
+
+    Get.bottomSheet(
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Recording...',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: TextButton(
+                    onPressed: () async {
+                      await _cancelLiveCommentRecording();
+                      Get.back();
+                    },
+                    child: const Text('Cancel'),
+                  ),
+                ),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () async {
+                      await _sendLiveCommentRecording();
+                      Get.back();
+                    },
+                    child: const Text('Send'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+      isScrollControlled: true,
+    ).whenComplete(() {
+      if (Get.isBottomSheetOpen == false && isLiveCommentRecording.value) {
+        _cancelLiveCommentRecording();
+      }
+    });
+  }
+
+  Future<void> _cancelLiveCommentRecording() async {
+    try {
+      await liveCommentRecorder?.stop();
+    } catch (_) {}
+    isLiveCommentRecording.value = false;
+    liveCommentRecorder?.reset();
+  }
+
+  Future<void> _sendLiveCommentRecording() async {
+    final recorder = liveCommentRecorder;
+    if (recorder == null) return;
+    try {
+      final path = await recorder.stop();
+      isLiveCommentRecording.value = false;
+      recorder.reset();
+      if (path == null || path.trim().isEmpty) return;
+      showLoader();
+      final url =
+          (await CommonService.instance.uploadFileGivePath(XFile(path))).data;
+      stopLoader();
+      if (url == null || url.trim().isEmpty) return;
+      _sendCommentToFirestore(
+        type: LivestreamCommentType.audio,
+        mediaUrl: url.trim(),
+      );
+    } catch (e) {
+      isLiveCommentRecording.value = false;
+      try {
+        recorder.reset();
+      } catch (_) {}
+      Loggers.error('Live comment audio send failed: $e');
+      stopLoader();
+    }
+  }
+
+  void onGiftTap(GiftType type,
+      {BattleView battleViewType = BattleView.red,
+      List<AppUser> users = const []}) {
+    // Allow self-gifting in livestream (host/cohost can gift themselves too)
+    if (liveData.value.type == LivestreamType.battle &&
+        liveData.value.battleType == BattleType.end) {
+      return showSnackBar(LKey.battleEndedGiftNotSent.tr);
+    }
+    GiftManager.openGiftSheet(
+        onCompletion: (giftManager) {
+          Gift gift = giftManager.gift;
+          AppUser? user = giftManager.streamUser;
+          final receivers = (giftManager.streamUsers != null &&
+                  giftManager.streamUsers!.isNotEmpty)
+              ? giftManager.streamUsers!
+              : (user == null ? const <AppUser>[] : <AppUser>[user]);
+
+          int coinPrice = gift.coinPrice?.toInt() ?? 0;
+
+          for (final r in receivers) {
+            _sendCommentToFirestore(
+                type: LivestreamCommentType.gift,
+                giftId: gift.id,
+                receiverId: r.userId);
+            updateUserStateToFirestore(
+              r.userId,
+              battleCoin: type == GiftType.battle ? coinPrice : null,
+              currentBattleCoin: type == GiftType.battle ? coinPrice : null,
+              liveCoin: type == GiftType.livestream ? coinPrice : null,
+            );
+          }
+        },
+        giftType: type,
+        battleViewType: battleViewType,
+        streamUsers: users.isEmpty ? getLiveGiftReceivers() : users);
+  }
+
+  List<AppUser> getLiveGiftReceivers() {
+    final all = <AppUser>[];
+    final seen = <int>{};
+
+    void addUserId(int? uid) {
+      if (uid == null || uid <= 0) return;
+      if (!seen.add(uid)) return;
+      final u = firestoreController.users
+          .firstWhereOrNull((element) => element.userId == uid);
+      if (u != null) all.add(u);
+    }
+
+    // Always include host
+    addUserId(liveData.value.hostId);
+
+    // Include co-hosts
+    final cohostIds = liveData.value.coHostIds ?? const <int>[];
+    for (final id in cohostIds) {
+      addUserId(id);
+    }
+
+    // For audio rooms, include seated occupants
+    if (isAudioRoom) {
+      final map = liveData.value.audioSeatMap;
+      for (final entry in map.entries) {
+        final v = entry.value;
+        int? uid;
+        if (v is int) {
+          uid = v;
+        } else {
+          uid = int.tryParse('$v');
+        }
+        addUserId(uid);
+      }
+    }
+
+    // Fallback: if still empty, return whatever we have in firestore list
+    if (all.isEmpty) {
+      return firestoreController.users;
+    }
+    return all;
+  }
+
+  _sendCommentToFirestore(
+      {required LivestreamCommentType type,
+      String? comment,
+      int? giftId,
+      Gift? gift,
+      int? receiverId,
+      String? mediaUrl,
+      String? waveData}) async {
+    int time = DateTime.now().millisecondsSinceEpoch;
+    try {
+      await _addUsersFirebaseFireStore();
+      liveStreamCommentsRef.doc('$time').set(LivestreamComment(
+              comment: comment,
+              commentType: type,
+              id: time,
+              senderId: myUserId,
+              receiverId: receiverId,
+              giftId: giftId,
+              gift: gift,
+              mediaUrl: mediaUrl,
+              waveData: waveData)
+          .toJson());
+    } catch (e) {
+      Loggers.error('Message Error : $e');
+    }
+  }
+
+  Future<void> sendGiftCommentToLive({
+    required Gift gift,
+    required int receiverId,
+  }) async {
+    final gid = gift.id?.toInt();
+    if (gid == null || gid <= 0) return;
+    await _sendCommentToFirestore(
+      type: LivestreamCommentType.gift,
+      giftId: gid,
+      gift: gift,
+      receiverId: receiverId,
+    );
+  }
+
+  Future<void> _addUsersFirebaseFireStore() async {
+    DocumentReference myUserRef = liveStreamUsersRef.doc(myUserId.toString());
+
+    DocumentSnapshot isMyUserExist = await myUserRef.get();
+    if (myUser.value != null) {
+      if (isMyUserExist.exists) {
+        myUserRef.update(myUser.value!.appUser.toJson());
+      } else {
+        myUserRef.set(myUser.value?.appUser.toJson());
+      }
+    }
+  }
+
+  void onVideoRequestSend(Livestream liveData) {
+    LivestreamUserState? state = liveUsersStates
+        .firstWhereOrNull((element) => element.userId == myUserId);
+    switch (state?.type) {
+      case null:
+        break;
+      case LivestreamUserType.audience:
+        updateUserStateToFirestore(myUserId,
+            type: LivestreamUserType.requested);
+        _sendCommentToFirestore(
+            type: LivestreamCommentType.request, receiverId: liveData.hostId);
+        showSnackBar(LKey.requestJoinToHost.tr);
+        break;
+      case LivestreamUserType.requested:
+        showSnackBar(LKey.joinRequestSentDescription.tr);
+        break;
+      case LivestreamUserType.host:
+      case LivestreamUserType.coHost:
+      case LivestreamUserType.invited:
+      case LivestreamUserType.left:
+        break;
+    }
+  }
+
+  Future<void> updateUserStateToFirestore(
+    int? userId, {
+    LivestreamUserType? type,
+    VideoAudioStatus? audioStatus,
+    VideoAudioStatus? videoStatus,
+    int? battleCoin,
+    int? liveCoin,
+    int? credits,
+    bool? isFollow,
+    int? joinTime,
+    int? currentBattleCoin,
+  }) async {
+    if (userId == null) {
+      Loggers.error('updateUserStateToFirestore: userId is null');
+      return;
+    }
+
+    DocumentReference reference =
+        liveStreamUserStatesRef.doc(userId.toString());
+    bool isExist = (await reference.get()).exists;
+
+    if (!isExist) {
+      try {
+        await reference.set({}, SetOptions(merge: true));
+      } catch (e) {
+        Loggers.error('updateUserStateToFirestore create failed $userId: $e');
+        return;
+      }
+    }
+
+    try {
+      final updateData = <String, dynamic>{
+        if (type != null) FirebaseConst.type: type.value,
+        if (audioStatus != null) FirebaseConst.audioStatus: audioStatus.value,
+        if (videoStatus != null) FirebaseConst.videoStatus: videoStatus.value,
+        if (battleCoin != null)
+          FirebaseConst.totalBattleCoin:
+              battleCoin == 0 ? 0 : FieldValue.increment(battleCoin),
+        if (currentBattleCoin != null)
+          FirebaseConst.currentBattleCoin: currentBattleCoin == 0
+              ? 0
+              : FieldValue.increment(currentBattleCoin),
+        if (liveCoin != null)
+          FirebaseConst.liveCoin:
+              liveCoin == 0 ? 0 : FieldValue.increment(liveCoin),
+        if (credits != null)
+          FirebaseConst.credits:
+              credits == 0 ? 0 : FieldValue.increment(credits),
+        if (isFollow != null)
+          FirebaseConst.followersGained: isFollow
+              ? FieldValue.arrayUnion([myUserId])
+              : FieldValue.arrayRemove([myUserId]),
+        if (joinTime != null) FirebaseConst.joinStreamTime: joinTime,
+      };
+      if (battleCoin != null || liveCoin != null || credits != null) {
+        myUser.value?.coinEstimatedValue(
+            battleCoin?.toDouble() ?? liveCoin?.toDouble());
+        SessionManager.instance.setUser(myUser.value);
+      }
+      await liveStreamUserStatesRef.doc(userId.toString()).update(updateData);
+      Loggers.success('User state updated for userId: $userId');
+    } catch (e, stack) {
+      Loggers.error('Failed to update user state: $e\n$stack');
+    }
+  }
+
+  void onInvite(AppUser? user, {bool isInvited = false}) {
+    updateUserStateToFirestore(user?.userId,
+        type: isInvited
+            ? LivestreamUserType.audience
+            : LivestreamUserType.invited);
+  }
+
+  void _showJoinStreamSheet(LivestreamUserState state) {
+    if (state.userId == myUserId && state.type == LivestreamUserType.invited) {
+      AppUser? hostUser = liveData.value.getHostUser(firestoreController.users);
+      isJoinSheetOpen = true;
+      Get.bottomSheet(
+              LiveStreamJoinSheet(
+                  hostUser: hostUser,
+                  myUser: myUser.value,
+                  onJoined: () async {
+                    LivestreamUserState? userState =
+                        liveUsersStates.firstWhereOrNull(
+                            (element) => element.userId == myUserId);
+                    if (userState?.type == LivestreamUserType.invited) {
+                      updateUserStateToFirestore(myUserId,
+                          type: LivestreamUserType.coHost);
+                    } else {
+                      showSnackBar(LKey.joinCancelledDescription.tr);
+                    }
+                  },
+                  onCancel: () {
+                    updateUserStateToFirestore(myUserId,
+                        type: LivestreamUserType.audience);
+                  }),
+              isScrollControlled: true,
+              enableDrag: false,
+              isDismissible: false)
+          .then(
+        (value) {
+          isJoinSheetOpen = false;
+        },
+      );
+    }
+  }
+
+  void publishCoHostStream(int streamId) async {
+    updateUserStateToFirestore(myUserId,
+        joinTime: DateTime.now().millisecondsSinceEpoch);
+    return;
+  }
+
+  void closeCoHostStream(int? streamId) {
+    StreamView? view = streamViews
+        .firstWhereOrNull((element) => element.streamId == '$streamId');
+    if (view != null) {
+      livekitSetCameraEnabled?.call(false);
+      livekitSetMicrophoneEnabled?.call(false);
+
+      // If co-host was seated in audio room, free the seat immediately.
+      if (streamId != null) {
+        clearSeatForUser(streamId);
+      }
+
+      updateLiveStreamData(coHostId: FieldValue.arrayRemove([streamId]));
+      LivestreamComment? comment = comments.firstWhereOrNull((element) =>
+          element.senderId == myUserId &&
+          element.commentType == LivestreamCommentType.joinedCoHost);
+      if (comment != null) {
+        liveStreamCommentsRef.doc(comment.id.toString()).delete();
+      }
+      updateUserStateToFirestore(streamId,
+          type: LivestreamUserType.audience,
+          audioStatus: VideoAudioStatus.offByMe,
+          videoStatus: VideoAudioStatus.offByMe,
+          battleCoin: 0,
+          currentBattleCoin: 0);
+      streamViews.removeWhere((element) => element.streamId == '$streamId');
+      streamEnded();
+    }
+  }
+
+  Future<bool> requestPermission() async {
+    Loggers.info("requestPermission...");
+    try {
+      PermissionStatus microphoneStatus = await Permission.microphone.request();
+      if (microphoneStatus != PermissionStatus.granted) {
+        Loggers.error('Error: Microphone permission not granted!!!');
+        return false;
+      }
+    } on Exception catch (error) {
+      Loggers.error("[ERROR], request microphone permission exception, $error");
+    }
+
+    try {
+      PermissionStatus cameraStatus = await Permission.camera.request();
+      if (cameraStatus != PermissionStatus.granted) {
+        Loggers.error('Error: Camera permission not granted!!!');
+        return false;
+      }
+    } on Exception catch (error) {
+      Loggers.error("[ERROR], request camera permission exception, $error");
+    }
+
+    return true;
+  }
+
+  void coHostVideoToggle(LivestreamUserState state) {
+    if (state.type != LivestreamUserType.coHost) return;
+    if (state.videoStatus == VideoAudioStatus.offByMe) {
+      return showSnackBar(LKey.theCoHostHasTurnedOffTheirVideo);
+    }
+
+    updateUserStateToFirestore(state.userId,
+        videoStatus: state.videoStatus == VideoAudioStatus.on
+            ? VideoAudioStatus.offByHost
+            : VideoAudioStatus.on);
+  }
+
+  void coHostAudioToggle(LivestreamUserState state) {
+    if (state.type != LivestreamUserType.coHost) return;
+    if (state.audioStatus == VideoAudioStatus.offByMe) {
+      return showSnackBar(LKey.theCoHostHasTurnedOffTheirAudio);
+    }
+
+    updateUserStateToFirestore(state.userId,
+        audioStatus: state.audioStatus == VideoAudioStatus.on
+            ? VideoAudioStatus.offByHost
+            : VideoAudioStatus.on);
+  }
+
+  void updateStateAction(
+      LivestreamUserState? oldState, LivestreamUserState newState) {
+    if (newState.userId == myUserId) {
+      Loggers.info('Updating state for userId: ${newState.toJson()}');
+
+      // If kicked/forced LEFT by host/cohost, leave immediately.
+      if (!_isExiting && newState.type == LivestreamUserType.left) {
+        _forceExitBecauseKicked();
+        return;
+      }
+
+      if (newState.type == LivestreamUserType.coHost &&
+          oldState?.type != LivestreamUserType.coHost) {
+        publishCoHostStream(myUserId);
+      }
+
+      if (newState.type == LivestreamUserType.audience &&
+          oldState?.type == LivestreamUserType.invited &&
+          isJoinSheetOpen) {
+        Get.back();
+      }
+
+      if (newState.type == LivestreamUserType.invited &&
+          oldState?.type == LivestreamUserType.audience) {
+        _showJoinStreamSheet(newState);
+      }
+      if (oldState?.type == LivestreamUserType.coHost &&
+          newState.type == LivestreamUserType.audience) {
+        closeCoHostStream(newState.userId);
+      }
+    }
+  }
+
+  Future<void> coHostDelete(LivestreamUserState state) async {
+    if (state.type != LivestreamUserType.coHost) return;
+    updateLiveStreamData(coHostId: FieldValue.arrayRemove([state.userId]));
+    updateUserStateToFirestore(state.userId, type: LivestreamUserType.audience);
+    // If audio room, also free the seat so UI doesn't show them still seated.
+    try {
+      await clearSeatForUserLatest(state.userId);
+    } catch (_) {}
+  }
+
+  Future<void> kickOutUser(int userId) async {
+    if (userId <= 0) return;
+    if (userId == myUserId) return;
+
+    // Never allow kicking host.
+    if (userId == (liveData.value.hostId ?? -1)) return;
+
+    try {
+      // If user was cohost, remove from coHostIds (affects video sections + UI)
+      final targetState =
+          liveUsersStates.firstWhereOrNull((e) => e.userId == userId);
+      if (targetState?.type == LivestreamUserType.coHost) {
+        updateLiveStreamData(coHostId: FieldValue.arrayRemove([userId]));
+      }
+
+      // Clear seat if audio room
+      await clearSeatForUserLatest(userId);
+
+      // Mark as LEFT so their device exits
+      updateUserStateToFirestore(
+        userId,
+        type: LivestreamUserType.left,
+        audioStatus: VideoAudioStatus.offByHost,
+        videoStatus: VideoAudioStatus.offByHost,
+      );
+    } catch (_) {}
+  }
+
+  void reportUser(int? userId) {
+    Get.bottomSheet(ReportSheet(reportType: ReportType.user, id: userId),
+        isScrollControlled: true);
+  }
+
+  void _timerStart(VoidCallback callBack) {
+    timer = Timer.periodic(
+      const Duration(milliseconds: 500),  // Reduced from 100ms to 500ms to save battery
+      (t) {
+        callBack.call();
+        // if (t.tick >= totalBattleSecond) {
+        //   timer?.cancel();
+        // }
+      },
+    );
+  }
+
+  void onStopButtonTap() {
+    // LiveKit: disconnect host then end stream globally (Firestore delete)
+    () async {
+      try {
+        await livekitDisconnect?.call();
+      } catch (_) {}
+      try {
+        await hostEndStream();
+      } catch (_) {}
+    }();
+    return;
+  }
+
+  Future<void> hostEndStream() async {
+    streamEnded();
+    // Stop Live must remove the live from everywhere (search/list) for all providers.
+    // Firestore is the source of truth for live listing.
+    await deleteStreamOnFirebase();
+    try {
+      await livekitDisconnect?.call();
+    } catch (_) {}
+  }
+
+  void streamEnded() {
+    LivestreamUserState? userState = liveUsersStates
+        .firstWhereOrNull((element) => element.userId == myUserId);
+    AppUser? user = firestoreController.users
+        .firstWhereOrNull((element) => element.userId == myUserId);
+    userState?.user = user;
+    int viewers = liveUsersStates.length;
+    if (isHost) {
+      Get.back();
+      Get.off(() => LiveStreamEndScreen(
+          userState: userState, isHost: isHost, viewers: viewers));
+    } else {
+      if (userState?.type == LivestreamUserType.coHost) {
+        Get.bottomSheet(
+                LiveStreamSummary(
+                    userState: userState, isHost: isHost, viewers: viewers),
+                isScrollControlled: true)
+            .then((value) {
+          updateUserStateToFirestore(myUserId,
+              battleCoin: 0,
+              liveCoin: 0,
+              currentBattleCoin: 0,
+              type: LivestreamUserType.audience);
+          if ((liveData.value.roomID ?? '').isEmpty) {
+            Get.back();
+          }
+        });
+      }
+    }
+  }
+
+  togglePlayerAudioToggle() {
+    videoPlayerController.value?.setVolume(isPlayerMute.value ? 1 : 0);
+    isPlayerMute.value = !isPlayerMute.value;
+  }
+
+  void toggleView() {
+    isViewVisible.value = !isViewVisible.value;
+  }
+
+  void startBattle() {
+    final opponentId = selectedBattleOpponentId.value;
+    if (opponentId > 0) {
+      startBattleWithOpponent(opponentId);
+    } else {
+      updateLiveStreamData(
+        battleType: BattleType.waiting,
+        battleDuration: AppRes.battleDurationInMinutes,
+        battleCreatedAt: DateTime.now().millisecondsSinceEpoch,
+        type: LivestreamType.battle,
+      );
+    }
+  }
+
+  void battleRunning() {
+    Livestream stream = liveData.value;
+    // Battle Start Timer Logic
+
+    final startTime =
+        DateTime.fromMillisecondsSinceEpoch(stream.battleCreatedAt ?? 0);
+    final endTime = startTime
+        .add(Duration(seconds: totalBattleSecond + AppRes.battleStartInSecond));
+
+    Loggers.success('Battle Timer Started');
+
+    _timerStart(() {
+      final remaining = endTime.difference(DateTime.now()).inSeconds;
+      remainingBattleSeconds.value = remaining.clamp(0, totalBattleSecond);
+
+      if (remainingBattleSeconds.value <= 10) {
+        if (!countdownPlayer.playing) {
+          countdownPlayer
+              .seek(Duration(seconds: 10 - remainingBattleSeconds.value));
+          countdownPlayer.play();
+        }
+      }
+
+      Loggers.info(
+          '[BATTLE RUNNING] Battle end in ${remainingBattleSeconds.value} sec.');
+
+      if (remainingBattleSeconds.value <= 0) {
+        winAudioPlayer.seek(const Duration(seconds: 0));
+        winAudioPlayer.play();
+        timer?.cancel();
+        updateLiveStreamData(battleType: BattleType.end);
+      }
+    });
+  }
+
+  void startMinViewerTimeoutCheck() {
+    if (minViewerTimeoutTimer?.isActive ?? false) return;
+    Loggers.info(
+        'Check Min. Viewers Required to continue live $timeoutMinutes Minutes');
+    minViewerTimeoutTimer =
+        Timer.periodic(Duration(minutes: timeoutMinutes), (_) {
+      minViewerTimeoutTimer?.cancel();
+      if ((liveData.value.watchingCount ?? 0) <= minViewersThreshold) {
+        isMinViewerTimeout.value = true;
+        Loggers.info('Close Stream Because of Min. Viewers');
+      }
+    });
+  }
+
+  void exitAudienceImmediate() {
+    onCloseAudienceBtn();
+  }
+
+  void onCloseAudienceBtn() {
+    // Role-based behavior:
+    // - coHost: show Exit/Cancel sheet
+    // - normal audience: leave immediately (no popup)
+    try {
+      final myState =
+          liveUsersStates.firstWhereOrNull((e) => e.userId == myUserId);
+      final isCoHost = myState?.type == LivestreamUserType.coHost;
+      if (isCoHost) {
+        onExitButtonTap();
+      } else {
+        exitLiveOnly();
+      }
+    } catch (_) {
+      exitLiveOnly();
+    }
+  }
+
+  Future<void> openBeautySheet() async {
+    if (!isArEnabled.value) {
+      await toggleArEnabled();
+    }
+
+    final settings = SessionManager.instance.getSettings();
+    final deepEffects = settings?.deepARFilters ?? const <DeepARFilters>[];
+    final luts = settings?.luts ?? const <LutItem>[];
+
+    int arTabIndex = 0;
+
+    await Get.bottomSheet(
+      Container(
+        decoration: BoxDecoration(
+          color: const Color(0xFF1A1A1A).withValues(alpha: 0.95),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.5),
+              blurRadius: 20,
+              spreadRadius: 5,
+            )
+          ],
+        ),
+        padding: const EdgeInsets.fromLTRB(0, 16, 0, 24),
+        child: SafeArea(
+          top: false,
+          child: StatefulBuilder(
+            builder: (context, modalSetState) {
+              void update(VoidCallback fn) {
+                modalSetState(fn);
+              }
+
+              final filterPresets = <Map<String, dynamic>>[
+                {'name': 'None', 'preset': 'none'},
+                {'name': 'LUT', 'preset': 'lut'},
+              ];
+
+              const tabs = [
+                'Effects',
+                'Filters',
+                'Beauty',
+                'Makeup',
+                'Hair',
+                'Color'
+              ];
+              final hairColors = [
+                Colors.black,
+                Colors.brown,
+                Colors.red,
+                Colors.amber,
+                Colors.blue,
+                Colors.purple,
+                Colors.green,
+                Colors.grey,
+              ];
+
+              Widget buildSlider(String label, RxDouble rxValue,
+                  {double min = 0.0, double max = 1.0}) {
+                return Padding(
+                  padding:
+                      const EdgeInsets.symmetric(vertical: 8, horizontal: 20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            label,
+                            style: TextStyleCustom.outFitMedium500(
+                                fontSize: 14, color: Colors.white),
+                          ),
+                          const Spacer(),
+                          Obx(() => Text(
+                                '${(rxValue.value * 100).round()}',
+                                style: TextStyleCustom.outFitRegular400(
+                                    fontSize: 14, color: Colors.white70),
+                              )),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      SizedBox(
+                        height: 24,
+                        child: SliderTheme(
+                          data: SliderTheme.of(context).copyWith(
+                            trackHeight: 4,
+                            activeTrackColor: themeAccentSolid(context),
+                            inactiveTrackColor: Colors.white12,
+                            thumbColor: Colors.white,
+                            thumbShape: const RoundSliderThumbShape(
+                                enabledThumbRadius: 8),
+                            overlayShape: const RoundSliderOverlayShape(
+                                overlayRadius: 16),
+                          ),
+                          child: Obx(() => Slider(
+                                value: rxValue.value,
+                                min: min,
+                                max: max,
+                                onChanged: (v) {
+                                  rxValue.value = v;
+                                  applyLivekitArSettings();
+                                },
+                              )),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }
+
+              Widget buildContent() {
+                if (arTabIndex == 0) {
+                  // Effects (Masks)
+                  return SizedBox(
+                    height: 100,
+                    child: ListView.separated(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      scrollDirection: Axis.horizontal,
+                      itemCount:
+                          deepEffects.isEmpty ? 1 : deepEffects.length + 1,
+                      separatorBuilder: (_, __) => const SizedBox(width: 12),
+                      itemBuilder: (context, index) {
+                        if (index == 0) {
+                          return Obx(() {
+                            final selected = selectedEffect.value == null;
+                            return _FxCircle(
+                              selected: selected,
+                              label: 'None',
+                              onTap: () async {
+                                selectedEffect.value = null;
+                                currentEffectPath.value = '';
+                                await applyLivekitArSettings();
+                              },
+                            );
+                          });
+                        }
+                        final effect = deepEffects[index - 1];
+                        final raw = effect.image ?? '';
+                        final img = raw.isNotEmpty ? raw.addBaseURL() : '';
+
+                        return Obx(() {
+                          final selected = selectedEffect.value == effect;
+                          return _FxCircle(
+                            selected: selected,
+                            label: effect.title ?? 'Effect',
+                            imageUrl: img,
+                            onTap: () async {
+                              selectedEffect.value = effect;
+                              // Show loading indicator or toast if needed?
+                              final path =
+                                  await _resolveDeepArEffectPath(effect);
+                              if (path != null) {
+                                currentEffectPath.value = path;
+                                await applyLivekitArSettings();
+                              }
+                            },
+                          );
+                        });
+                      },
+                    ),
+                  );
+                } else if (arTabIndex == 1) {
+                  // Filters (LUTs)
+                  return SizedBox(
+                    height: 100,
+                    child: ListView.separated(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      scrollDirection: Axis.horizontal,
+                      itemCount: luts.isEmpty ? 1 : luts.length + 1,
+                      separatorBuilder: (_, __) => const SizedBox(width: 12),
+                      itemBuilder: (context, index) {
+                        if (index == 0) {
+                          return Obx(() {
+                            final selected = arFilterPreset.value == 'none';
+                            return _FxCircle(
+                              selected: selected,
+                              label: 'None',
+                              onTap: () async {
+                                arFilterPreset.value = 'none';
+                                await applyLivekitArSettings();
+                              },
+                            );
+                          });
+                        }
+                        final lut = luts[index - 1];
+                        final name = (lut.title ?? 'LUT').toString();
+                        final raw = lut.image?.toString() ?? '';
+                        final img = raw.isNotEmpty ? raw.addBaseURL() : '';
+                        final file = lut.file?.toString() ?? '';
+                        return Obx(() {
+                          final selected = arFilterPreset.value == 'lut' &&
+                              arFilterLutAssetPath.value == file;
+                          return _FxCircle(
+                            selected: selected,
+                            label: name,
+                            imageUrl: img.isEmpty ? null : img,
+                            onTap: () async {
+                              arFilterPreset.value = 'lut';
+                              arFilterLutAssetPath.value = file;
+                              await applyLivekitArSettings();
+                            },
+                          );
+                        });
+                      },
+                    ),
+                  );
+                } else if (arTabIndex == 2) {
+                  // Beauty
+                  return SizedBox(
+                    height: 240,
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.only(bottom: 20),
+                      child: Column(
+                        children: [
+                          buildSlider('Smooth', arBeautySmooth),
+                          buildSlider('Brighten', arBeautyBrighten),
+                          buildSlider('Sharpen', arBeautySharpen),
+                          buildSlider('Glow', arBeautyGlow),
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+                            child: Text('Face Morphing',
+                                style: TextStyleCustom.outFitSemiBold600(
+                                    color: Colors.white70, fontSize: 12)),
+                          ),
+                          buildSlider('Eye Size', arFaceEyeSize),
+                          buildSlider('Face Shape', arFaceShape),
+                          buildSlider('Nose Size', arFaceNoseSize),
+                          buildSlider('Chin Size', arFaceChinSize),
+                          buildSlider('Mouth Pos', arFaceMouthPos),
+                        ],
+                      ),
+                    ),
+                  );
+                } else if (arTabIndex == 3) {
+                  // Makeup
+                  return SizedBox(
+                    height: 240,
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.only(bottom: 20),
+                      child: Column(
+                        children: [
+                          buildSlider('Lipstick', arMakeupLipsColor),
+                          buildSlider('Blush', arMakeupBlush),
+                          buildSlider('Foundation', arMakeupFoundation),
+                          buildSlider('Eyeshadow', arMakeupEyeshadow),
+                          buildSlider('Eyelashes', arMakeupEyelashes),
+                          buildSlider('Eyebrows', arMakeupEyebrows),
+                          const Divider(color: Colors.white12, height: 30),
+                          buildSlider('Skin Smooth', arMakeupSkinSmooth),
+                          buildSlider('Face Tone', arMakeupFaceTone),
+                          buildSlider('Highlight', arMakeupHighlight),
+                          buildSlider('Eye Bright', arMakeupEyeBrightness),
+                          buildSlider('Contour', arMakeupSoftContour),
+                        ],
+                      ),
+                    ),
+                  );
+                } else if (arTabIndex == 4) {
+                  // Hair
+                  return Column(
+                    children: [
+                      buildSlider('Hair Color Strength', arHairStrength),
+                      const SizedBox(height: 20),
+                      SizedBox(
+                        height: 60,
+                        child: ListView.separated(
+                          padding: const EdgeInsets.symmetric(horizontal: 20),
+                          scrollDirection: Axis.horizontal,
+                          itemCount: hairColors.length,
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(width: 16),
+                          itemBuilder: (context, index) {
+                            final color = hairColors[index];
+                            return Obx(() {
+                              final selected =
+                                  arHairColor.value.toARGB32() == color.toARGB32();
+                              return GestureDetector(
+                                onTap: () {
+                                  arHairColor.value = color;
+                                  applyLivekitArSettings();
+                                },
+                                child: Container(
+                                  width: 48,
+                                  height: 48,
+                                  decoration: BoxDecoration(
+                                    color: color,
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                        color: selected
+                                            ? Colors.white
+                                            : Colors.white12,
+                                        width: selected ? 3 : 1),
+                                    boxShadow: selected
+                                        ? [
+                                            BoxShadow(
+                                                color: color.withValues(alpha: 0.5),
+                                                blurRadius: 10)
+                                          ]
+                                        : null,
+                                  ),
+                                  child: selected
+                                      ? const Icon(Icons.check,
+                                          color: Colors.white, size: 24)
+                                      : null,
+                                ),
+                              );
+                            });
+                          },
+                        ),
+                      ),
+                    ],
+                  );
+                } else if (arTabIndex == 5) {
+                  // Color Adjust
+                  return SizedBox(
+                    height: 240,
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.only(bottom: 20),
+                      child: Column(
+                        children: [
+                          buildSlider('Exposure', arColorExposure,
+                              min: -2.0, max: 2.0),
+                          buildSlider('Brightness', arColorBrightness,
+                              min: -1.0, max: 1.0),
+                          buildSlider('Contrast', arColorContrast,
+                              min: 0.0, max: 2.0),
+                          buildSlider('Saturation', arColorSaturation,
+                              min: 0.0, max: 2.0),
+                          buildSlider('Temp', arColorTemperature,
+                              min: -100, max: 100),
+                          buildSlider('Tint', arColorTint, min: -100, max: 100),
+                        ],
+                      ),
+                    ),
+                  );
+                }
+                return const SizedBox();
+              }
+
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Row(
+                      children: [
+                        Text('Beauty & Effects',
+                            style: TextStyleCustom.outFitBold700(
+                                fontSize: 18, color: Colors.white)),
+                        const Spacer(),
+                        InkWell(
+                          onTap: () => Get.back(),
+                          child: Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: const BoxDecoration(
+                              color: Colors.white10,
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(Icons.close,
+                                color: Colors.white, size: 20),
+                          ),
+                        )
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  // Tabs
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Row(
+                      children: List.generate(tabs.length, (index) {
+                        final selected = arTabIndex == index;
+                        return Padding(
+                          padding: const EdgeInsets.only(right: 12),
+                          child: _FxTabButton(
+                            label: tabs[index],
+                            selected: selected,
+                            onTap: () => update(() => arTabIndex = index),
+                          ),
+                        );
+                      }),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  // Content
+                  buildContent(),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+      backgroundColor: Colors.transparent,
+      isDismissible: true,
+    );
+  }
+
+  void pushNotificationToFollowers(Livestream liveData) {
+    AppUser? hostUser = liveData.getHostUser([]);
+    NotificationService.instance.pushNotification(
+        type: NotificationType.liveStream,
+        title: LKey.liveStreamNotificationTitle
+            .trParams({'name': hostUser?.username ?? ''}),
+        body: LKey.liveStreamNotificationBody.tr,
+        deviceType: 1,
+        topic: '${liveData.hostId}_ios',
+        data: liveData.toJson());
+    NotificationService.instance.pushNotification(
+        type: NotificationType.liveStream,
+        title: LKey.liveStreamNotificationTitle
+            .trParams({'name': hostUser?.username ?? ''}),
+        body: LKey.liveStreamNotificationBody.tr,
+        deviceType: 0,
+        topic: '${liveData.hostId}_android',
+        data: liveData.toJson());
+  }
+}
+
+class StreamView {
+  String streamId;
+  int streamViewId;
+  Widget streamView;
+  bool isMuted;
+
+  StreamView(this.streamId, this.streamViewId, this.streamView, this.isMuted);
+}
+
+class _FxTabButton extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  const _FxTabButton({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected ? Colors.tealAccent : Colors.white12,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: selected ? Colors.black : Colors.white,
+            fontSize: 13,
+            fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _FxCircle extends StatelessWidget {
+  final bool selected;
+  final String label;
+  final String? imageUrl;
+  final Color? color;
+  final VoidCallback onTap;
+  const _FxCircle({
+    required this.selected,
+    required this.label,
+    this.imageUrl,
+    required this.onTap,
+  }) : color = null;
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        children: [
+          Container(
+            width: 46,
+            height: 46,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(
+                  color: selected ? Colors.tealAccent : Colors.transparent,
+                  width: 2),
+              color: color,
+              image: (color == null && imageUrl != null)
+                  ? DecorationImage(
+                      image: NetworkImage(imageUrl!), fit: BoxFit.cover)
+                  : null,
+            ),
+            child: (color == null && imageUrl == null)
+                ? const Icon(Icons.block, color: Colors.white, size: 20)
+                : null,
+          ),
+          const SizedBox(height: 4),
+          SizedBox(
+            width: 50,
+            child: Text(
+              label,
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                  color: selected ? Colors.tealAccent : Colors.white70,
+                  fontSize: 10),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+�

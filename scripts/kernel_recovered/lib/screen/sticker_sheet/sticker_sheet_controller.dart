@@ -1,0 +1,29 @@
+import 'package:get/get.dart';
+import 'package:shortzz/common/controller/base_controller.dart';
+import 'package:shortzz/common/service/api/user_service.dart';
+import 'package:shortzz/model/sticker/stickers_model.dart';
+
+class StickerSheetController extends BaseController {
+  RxList<StickerItem> stickers = <StickerItem>[].obs;
+  RxBool isLoadingStickers = false.obs;
+
+  @override
+  void onInit() {
+    super.onInit();
+    fetchStickers();
+  }
+
+  Future<void> fetchStickers() async {
+    if (isLoadingStickers.value) return;
+    isLoadingStickers.value = true;
+    try {
+      final res = await UserService.instance.stickers();
+      stickers.assignAll(res.data ?? <StickerItem>[]);
+    } catch (e) {
+      stickers.clear();
+      showSnackBar('Failed to load stickers');
+    } finally {
+      isLoadingStickers.value = false;
+    }
+  }
+}

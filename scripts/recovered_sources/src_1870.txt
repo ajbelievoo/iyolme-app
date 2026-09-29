@@ -1,0 +1,15 @@
+qfile:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/image-4.3.0/lib/src/command/transform/flip_cmd.dartÅÉimport '../../transform/flip.dart';
+import '../command.dart';
+
+class FlipCmd extends Command {
+  FlipDirection direction;
+
+  FlipCmd(Command? input, {required this.direction}) : super(input);
+
+  @override
+  Future<void> executeCommand() async {
+    await input?.execute();
+    final img = input?.outputImage;
+    outputImage = img != null ? flip(img, direction: direction) : null;
+  }
+}

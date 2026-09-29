@@ -1,0 +1,34 @@
+xfile:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/image-4.3.0/lib/src/command/transform/copy_resize_cmd.dartƒrimport '../../color/color.dart';
+import '../../image/interpolation.dart';
+import '../../transform/copy_resize.dart';
+import '../command.dart';
+
+class CopyResizeCmd extends Command {
+  int? width;
+  int? height;
+  bool? maintainAspect;
+  Color? backgroundColor;
+  Interpolation interpolation;
+
+  CopyResizeCmd(Command? input,
+      {this.width,
+      this.height,
+      this.maintainAspect,
+      this.backgroundColor,
+      this.interpolation = Interpolation.nearest})
+      : super(input);
+
+  @override
+  Future<void> executeCommand() async {
+    final img = await input?.getImage();
+    outputImage = img != null
+        ? copyResize(img,
+            width: width,
+            height: height,
+            maintainAspect: maintainAspect,
+            backgroundColor: backgroundColor,
+            interpolation: interpolation)
+        : null;
+  }
+}
+#

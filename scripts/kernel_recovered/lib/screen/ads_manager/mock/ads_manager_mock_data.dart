@@ -1,0 +1,151 @@
+import 'package:flutter/material.dart';
+
+class AdsManagerDashboardSummary {
+  final num walletBalance;
+  final int activeCampaigns;
+  final num totalSpend;
+  final int impressions;
+  final int clicks;
+
+  const AdsManagerDashboardSummary({
+    required this.walletBalance,
+    required this.activeCampaigns,
+    required this.totalSpend,
+    required this.impressions,
+    required this.clicks,
+  });
+
+  double get ctr => impressions > 0 ? (clicks / impressions) * 100 : 0;
+}
+
+class AdsManagerCampaignItem {
+  final int id;
+  final String title;
+  final String? mediaUrl;
+  final String status;
+  final String placement;
+  final num spend;
+  final num budget;
+  final num dailyBudget;
+  final int impressions;
+  final int clicks;
+  final DateTime createdAt;
+
+  const AdsManagerCampaignItem({
+    required this.id,
+    required this.title,
+    this.mediaUrl,
+    required this.status,
+    required this.placement,
+    required this.spend,
+    required this.budget,
+    this.dailyBudget = 0,
+    required this.impressions,
+    required this.clicks,
+    required this.createdAt,
+  });
+}
+
+class AdsWalletTransactionItem {
+  final String title;
+  final num amount;
+  final DateTime date;
+
+  const AdsWalletTransactionItem({
+    required this.title,
+    required this.amount,
+    required this.date,
+  });
+
+  String get dateLabel {
+    final y = date.year.toString().padLeft(4, '0');
+    final m = date.month.toString().padLeft(2, '0');
+    final d = date.day.toString().padLeft(2, '0');
+    return '$y-$m-$d';
+  }
+}
+
+class AdsManagerMockData {
+  AdsManagerMockData._();
+
+  static const AdsManagerDashboardSummary summary = AdsManagerDashboardSummary(
+    walletBalance: 245.50,
+    activeCampaigns: 2,
+    totalSpend: 139.20,
+    impressions: 45210,
+    clicks: 812,
+  );
+
+  static final List<AdsManagerCampaignItem> recentCampaigns =
+      <AdsManagerCampaignItem>[
+    AdsManagerCampaignItem(
+      id: 101,
+      title: 'Promote Reel - Jan',
+      status: 'Running',
+      placement: 'Reels',
+      spend: 42.75,
+      budget: 100,
+      impressions: 18230,
+      clicks: 390,
+      createdAt: DateTime(2026, 1, 19),
+    ),
+    AdsManagerCampaignItem(
+      id: 102,
+      title: 'Boost Post - Profile',
+      status: 'Pending',
+      placement: 'Feed',
+      spend: 0,
+      budget: 50,
+      impressions: 0,
+      clicks: 0,
+      createdAt: DateTime(2026, 2, 2),
+    ),
+    AdsManagerCampaignItem(
+      id: 103,
+      title: 'Website Visits - Sale',
+      status: 'Paused',
+      placement: 'Story',
+      spend: 96.45,
+      budget: 200,
+      impressions: 26980,
+      clicks: 422,
+      createdAt: DateTime(2026, 1, 5),
+    ),
+  ];
+
+  static final List<AdsWalletTransactionItem> walletSpendHistory =
+      <AdsWalletTransactionItem>[
+    AdsWalletTransactionItem(
+      title: 'Campaign Spend • Promote Reel',
+      amount: 12.50,
+      date: DateTime(2026, 2, 8),
+    ),
+    AdsWalletTransactionItem(
+      title: 'Campaign Spend • Website Visits',
+      amount: 8.20,
+      date: DateTime(2026, 2, 7),
+    ),
+    AdsWalletTransactionItem(
+      title: 'Boost Post Spend',
+      amount: 4.00,
+      date: DateTime(2026, 2, 5),
+    ),
+  ];
+
+  static final List<AdsWalletTransactionItem> walletRefundHistory =
+      <AdsWalletTransactionItem>[
+    AdsWalletTransactionItem(
+      title: 'Refund • Paused campaign',
+      amount: 6.75,
+      date: DateTime(2026, 2, 4),
+    ),
+  ];
+
+  static List<Color> chartColors(BuildContext context) {
+    return <Color>[
+      Theme.of(context).colorScheme.primary,
+      Theme.of(context).colorScheme.secondary,
+      Colors.deepOrange,
+    ];
+  }
+}

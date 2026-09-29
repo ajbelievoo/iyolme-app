@@ -1,0 +1,22 @@
+,|g€Žfile:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/wakelock_plus_platform_interface-1.4.0/lib/src/method_channel_wakelock_plus.dart‚{import 'package:wakelock_plus_platform_interface/messages.g.dart';
+import 'package:wakelock_plus_platform_interface/wakelock_plus_platform_interface.dart';
+
+/// Method channel implementation of the [WakelockPlusPlatformInterface].
+class MethodChannelWakelockPlus extends WakelockPlusPlatformInterface {
+  final _api = WakelockPlusApi();
+
+  @override
+  Future<bool> get enabled async {
+    final message = await _api.isEnabled();
+
+    return message.enabled!;
+  }
+
+  @override
+  Future<void> toggle({required bool enable}) async {
+    final message = ToggleMessage();
+    message.enable = enable;
+
+    await _api.toggle(message);
+  }
+}

@@ -1,0 +1,138 @@
+q¸Bfile:///E:/flutterapp_pro/lib/common/widget/sponsored_ad_card.dartêÒimport 'package:flutter/material.dart';
+import 'package:shortzz/common/extensions/string_extension.dart';
+import 'package:shortzz/common/manager/logger.dart';
+import 'package:shortzz/common/service/api/platform_ads_service.dart';
+import 'package:shortzz/model/post_story/post_model.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:visibility_detector/visibility_detector.dart';
+
+class SponsoredAdCard extends StatelessWidget {
+  final Post post;
+
+  const SponsoredAdCard({super.key, required this.post});
+
+  Future<void> _openUrl() async {
+    final raw = (post.sponsoredUrl ?? '').trim();
+    if (raw.isEmpty) return;
+
+    final uri = Uri.tryParse(raw);
+    if (uri == null) return;
+
+    try {
+      final adId = post.sponsoredAdId;
+      if (adId != null) {
+        await PlatformAdsService.instance.trackAdEvent(
+          event: 'click',
+          adId: adId,
+          placement: 'feed',
+          action: 'card_click',
+        );
+      }
+    } catch (_) {}
+
+    try {
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (ok) {
+        final adId = post.sponsoredAdId;
+        if (adId != null) {
+          try {
+            await PlatformAdsService.instance.trackAdEvent(
+              event: 'click',
+              adId: adId,
+              placement: 'feed',
+              action: 'cta_click',
+            );
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!post.isAd) {
+      return const SizedBox();
+    }
+
+    final title = (post.description ?? '').trim();
+    final cta = (post.sponsoredCta ?? 'Learn more').trim();
+
+    final adId = post.sponsoredAdId;
+    
+    // Debug logging for thumbnail URL
+    final rawThumbnail = post.thumbnail ?? '';
+    final finalUrl = rawThumbnail.addBaseURL();
+    Loggers.info('[AD_DEBUG] SponsoredAdCard - Raw thumbnail: $rawThumbnail');
+    Loggers.info('[AD_DEBUG] SponsoredAdCard - Final URL: $finalUrl');
+    Loggers.info('[AD_DEBUG] SponsoredAdCard - isAd: ${post.isAd}, feedItemType: ${post.feedItemType}');
+    
+    return VisibilityDetector(
+      key: ValueKey('feed_ad_${post.id ?? adId ?? ''}'),
+      onVisibilityChanged: (info) async {
+        if (info.visibleFraction <= 0.6) return;
+        if (adId == null) return;
+        try {
+          await PlatformAdsService.instance.trackAdEvent(
+            event: 'impression',
+            adId: adId,
+            placement: 'feed',
+          );
+        } catch (_) {}
+      },
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        decoration: BoxDecoration(
+          color: Theme.of(context).cardColor,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if ((post.thumbnail ?? '').isNotEmpty)
+              AspectRatio(
+                aspectRatio: 16 / 9,
+                child: Image.network(
+                  (post.thumbnail ?? '').addBaseURL(),
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => const SizedBox(),
+                ),
+              ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+              child: Text(
+                post.sponsoredLabel ?? 'Sponsored',
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            if (title.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                child: Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              child: SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: _openUrl,
+                  child: Text(cta.isEmpty ? 'Learn more' : cta),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+Äã

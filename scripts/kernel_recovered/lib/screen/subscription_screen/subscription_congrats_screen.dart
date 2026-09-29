@@ -1,0 +1,234 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:shortzz/model/user_model/user_model.dart';
+import 'package:shortzz/screen/dashboard_screen/dashboard_screen.dart';
+import 'package:shortzz/utilities/asset_res.dart';
+import 'package:shortzz/utilities/style_res.dart';
+import 'package:shortzz/utilities/text_style_custom.dart';
+import 'package:shortzz/utilities/theme_res.dart';
+
+class SubscriptionCongratsScreen extends StatefulWidget {
+  final String? planName;
+  final List<String> benefits;
+  final User? user;
+
+  const SubscriptionCongratsScreen({
+    super.key,
+    this.planName,
+    this.benefits = const [],
+    this.user,
+  });
+
+  @override
+  State<SubscriptionCongratsScreen> createState() => _SubscriptionCongratsScreenState();
+}
+
+class _SubscriptionCongratsScreenState extends State<SubscriptionCongratsScreen> with SingleTickerProviderStateMixin {
+  Timer? _timer;
+  int _secondsLeft = 10;
+
+  late final AnimationController _tickController;
+  late final Animation<double> _tickScale;
+
+  @override
+  void initState() {
+    super.initState();
+
+    _tickController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    );
+    _tickScale = CurvedAnimation(parent: _tickController, curve: Curves.elasticOut);
+    _tickController.forward();
+
+    _timer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted) return;
+      if (_secondsLeft <= 1) {
+        t.cancel();
+        _goToProfile();
+        return;
+      }
+      setState(() {
+        _secondsLeft -= 1;
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _tickController.dispose();
+    super.dispose();
+  }
+
+  void _goToProfile() {
+    Get.offAll(() => DashboardScreen(myUser: widget.user));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final benefits = widget.benefits.where((e) => e.trim().isNotEmpty).toList();
+
+    return Scaffold(
+      backgroundColor: scaffoldBackgroundColor(context),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Align(
+                alignment: AlignmentDirectional.centerEnd,
+                child: TextButton(
+                  onPressed: _goToProfile,
+                  child: Text(
+                    'Skip',
+                    style: TextStyleCustom.outFitMedium500(color: textLightGrey(context)),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Center(
+                child: Container(
+                  width: 110,
+                  height: 110,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: StyleRes.themeGradient,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.12),
+                        blurRadius: 18,
+                        offset: const Offset(0, 8),
+                      ),
+                    ],
+                  ),
+                  child: Center(
+                    child: ScaleTransition(
+                      scale: _tickScale,
+                      child: Image.asset(
+                        AssetRes.icBlueTick,
+                        height: 58,
+                        width: 58,
+                        color: whitePure(context),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 18),
+              Center(
+                child: Text(
+                  'Congratulations',
+                  style: TextStyleCustom.unboundedExtraBold800(
+                    fontSize: 30,
+                    color: textDarkGrey(context),
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Center(
+                child: Text(
+                  widget.planName == null || (widget.planName ?? '').isEmpty
+                      ? 'Your Plus subscription is now active.'
+                      : 'Your ${widget.planName} subscription is now active.',
+                  style: TextStyleCustom.outFitRegular400(
+                    fontSize: 15,
+                    color: textLightGrey(context),
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+              const SizedBox(height: 22),
+              Text(
+                'Your benefits',
+                style: TextStyleCustom.unboundedMedium500(
+                  fontSize: 16,
+                  color: textDarkGrey(context),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Expanded(
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: bgLightGrey(context),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: textLightGrey(context).withValues(alpha: .15)),
+                  ),
+                  child: benefits.isEmpty
+                      ? Center(
+                          child: Text(
+                            'Plus is active. Enjoy your premium features.',
+                            style: TextStyleCustom.outFitRegular400(color: textLightGrey(context)),
+                          ),
+                        )
+                      : ListView.separated(
+                          itemCount: benefits.length,
+                          separatorBuilder: (_, __) => Divider(
+                            color: textLightGrey(context).withValues(alpha: .2),
+                            height: 16,
+                          ),
+                          itemBuilder: (_, i) {
+                            return Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Icon(Icons.check_circle, size: 18, color: Colors.black),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    benefits[i],
+                                    style: TextStyleCustom.outFitRegular400(
+                                      fontSize: 14,
+                                      color: textDarkGrey(context),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            );
+                          },
+                        ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  color: Colors.black,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Redirecting to your profile in $_secondsLeft sec',
+                        style: TextStyleCustom.outFitMedium500(
+                          fontSize: 14,
+                          color: whitePure(context),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    SizedBox(
+                      height: 18,
+                      width: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.5,
+                        valueColor: AlwaysStoppedAnimation<Color>(whitePure(context)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}

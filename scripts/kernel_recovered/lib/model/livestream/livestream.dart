@@ -1,0 +1,213 @@
+import 'package:get/get.dart';
+import 'package:shortzz/common/controller/firebase_firestore_controller.dart';
+import 'package:shortzz/model/livestream/app_user.dart';
+import 'package:shortzz/utilities/app_res.dart';
+
+class Livestream {
+  int? watchingCount;
+  String? description;
+  LivestreamType? type;
+  BattleType? battleType;
+  int battleDuration = AppRes.battleDurationInMinutes;
+  int? isRestrictToJoin;
+  int? hostViewID;
+  String? roomID;
+  int? likeCount;
+  int? hostId;
+  List<int>? coHostIds;
+  AppUser? hostUser;
+  List<AppUser>? coHostUsers;
+  int? createdAt;
+  int? battleCreatedAt;
+  int? isDummyLive;
+  String? dummyUserLink;
+
+  int liveLayoutSlots = 4;
+  String liveLayoutMode = 'video';
+  int battleOpponentId = 0;
+
+  int audioSeatCount = 8;
+  Map<String, dynamic> audioSeatMap = {};
+
+  Livestream(
+      {this.watchingCount,
+      this.description,
+      this.type,
+      this.battleType,
+      this.isRestrictToJoin,
+      this.hostViewID,
+      this.roomID,
+      this.likeCount,
+      this.hostId,
+      this.coHostIds,
+      this.createdAt,
+      this.battleCreatedAt,
+      this.isDummyLive,
+      this.dummyUserLink,
+      this.battleDuration = AppRes.battleDurationInMinutes,
+      this.liveLayoutSlots = 4,
+      this.liveLayoutMode = 'video',
+      this.battleOpponentId = 0,
+      this.audioSeatCount = 8,
+      Map<String, dynamic>? audioSeatMap})
+      : audioSeatMap = audioSeatMap ?? {};
+
+  Livestream.fromJson(Map<String, dynamic> json) {
+    final rawType = json['type'];
+    type = LivestreamType.fromString((rawType ?? LivestreamType.livestream.value).toString());
+    battleType = BattleType.fromString(json['battle_type']?.toString());
+    watchingCount = (json['watching_count'] is int)
+        ? (json['watching_count'] as int)
+        : int.tryParse('${json['watching_count'] ?? 0}');
+    description = json['description']?.toString();
+    isRestrictToJoin = (json['is_restrict_to_join'] is int)
+        ? (json['is_restrict_to_join'] as int)
+        : int.tryParse('${json['is_restrict_to_join']}');
+    hostViewID = (json['host_view_id'] is int)
+        ? (json['host_view_id'] as int)
+        : int.tryParse('${json['host_view_id']}');
+    roomID = (json['room_id'] ?? json['roomID'] ?? json['roomId'])?.toString();
+    likeCount = (json['like_count'] is int)
+        ? (json['like_count'] as int)
+        : int.tryParse('${json['like_count']}');
+
+    final dynamic rawHostId = json['host_id'] ??
+        json['hostId'] ??
+        json['hostID'] ??
+        json['host'] ??
+        json['host_user_id'] ??
+        json['hostUserId'];
+    if (rawHostId is int) {
+      hostId = rawHostId;
+    } else if (rawHostId is num) {
+      hostId = rawHostId.toInt();
+    } else {
+      hostId = int.tryParse('${rawHostId ?? ''}');
+    }
+    // Fallback: many implementations use room_id as host id.
+    hostId ??= int.tryParse(roomID ?? '');
+
+    final rawCoHosts = json['co-host_ids'];
+    if (rawCoHosts is List) {
+      coHostIds = rawCoHosts
+          .map((e) => e is int ? e : int.tryParse('$e'))
+          .whereType<int>()
+          .toList();
+    } else {
+      coHostIds = <int>[];
+    }
+
+    createdAt = (json['created_at'] is int)
+        ? (json['created_at'] as int)
+        : int.tryParse('${json['created_at']}');
+    battleCreatedAt = (json['battle_created_at'] is int)
+        ? (json['battle_created_at'] as int)
+        : int.tryParse('${json['battle_created_at']}');
+    isDummyLive = (json['is_dummy_live'] is int)
+        ? (json['is_dummy_live'] as int)
+        : int.tryParse('${json['is_dummy_live']}');
+    dummyUserLink = json['dummy_user_link']?.toString();
+    battleDuration = (json['battle_duration'] is int)
+        ? (json['battle_duration'] as int)
+        : int.tryParse('${json['battle_duration']}') ?? AppRes.battleDurationInMinutes;
+    liveLayoutSlots = (json['live_layout_slots'] is int)
+        ? (json['live_layout_slots'] as int)
+        : int.tryParse('${json['live_layout_slots']}') ?? 4;
+    liveLayoutMode = (json['live_layout_mode'] ?? 'video').toString();
+    battleOpponentId = (json['battle_opponent_id'] is int)
+        ? (json['battle_opponent_id'] as int)
+        : int.tryParse('${json['battle_opponent_id']}') ?? 0;
+
+    audioSeatCount = (json['audio_seat_count'] is int)
+        ? (json['audio_seat_count'] as int)
+        : int.tryParse('${json['audio_seat_count']}') ?? 8;
+    audioSeatMap = (json['audio_seat_map'] is Map)
+        ? Map<String, dynamic>.from(json['audio_seat_map'] as Map)
+        : {};
+  }
+
+  Map<String, dynamic> toJson() {
+    final Map<String, dynamic> data = <String, dynamic>{};
+    data['watching_count'] = watchingCount;
+    data['description'] = description;
+    data['type'] = type?.value;
+    data['battle_type'] = battleType?.value;
+    data['is_restrict_to_join'] = isRestrictToJoin;
+    data['host_view_id'] = hostViewID;
+    data['room_id'] = roomID;
+    data['like_count'] = likeCount;
+    data['host_id'] = hostId;
+    data['co-host_ids'] = coHostIds;
+    data['created_at'] = createdAt;
+    data['battle_created_at'] = battleCreatedAt;
+    data['is_dummy_live'] = isDummyLive;
+    data['dummy_user_link'] = dummyUserLink;
+    data['battle_duration'] = battleDuration;
+    data['live_layout_slots'] = liveLayoutSlots;
+    data['live_layout_mode'] = liveLayoutMode;
+    data['battle_opponent_id'] = battleOpponentId;
+    data['audio_seat_count'] = audioSeatCount;
+    data['audio_seat_map'] = audioSeatMap;
+    return data;
+  }
+
+  List<AppUser> getAllUsers(List<AppUser> users) {
+    AppUser? hostUser =
+        users.firstWhereOrNull((element) => element.userId == hostId);
+    final coHostUsers = coHostIds
+            ?.map((id) => users.firstWhereOrNull((user) => user.userId == id))
+            .whereType<AppUser>()
+            .toList() ??
+        [];
+
+    final allUsers = [if (hostUser != null) hostUser, ...coHostUsers];
+    return allUsers;
+  }
+
+  AppUser? getHostUser(List<AppUser> users) {
+    final controller = Get.find<FirebaseFirestoreController>();
+    AppUser? hostUser = controller.users
+        .firstWhereOrNull((element) => element.userId == hostId);
+    return hostUser;
+  }
+
+  List<AppUser> getCoHostUsers(List<AppUser> users) {
+    final coHostUsers = coHostIds
+            ?.map((id) => users.firstWhereOrNull((user) => user.userId == id))
+            .whereType<AppUser>()
+            .toList() ??
+        [];
+    return coHostUsers;
+  }
+}
+
+enum LivestreamType {
+  livestream('LIVESTREAM'),
+  battle('BATTLE'),
+  dummy('DUMMY');
+
+  final String value;
+
+  const LivestreamType(this.value);
+
+  static LivestreamType fromString(String value) {
+    return LivestreamType.values.firstWhereOrNull((e) => e.value == value) ??
+        LivestreamType.livestream;
+  }
+}
+
+enum BattleType {
+  initiate('INITIATE'),
+  waiting('WAITING'),
+  running('RUNNING'),
+  end('END');
+
+  final String value;
+
+  const BattleType(this.value);
+
+  static BattleType fromString(String? value) {
+    return BattleType.values.firstWhereOrNull((e) => e.value == value) ??
+        BattleType.initiate;
+  }
+}

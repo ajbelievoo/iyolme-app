@@ -1,0 +1,983 @@
+import 'dart:convert';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:get/get.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:gal/gal.dart';
+import 'package:shortzz/common/manager/logger.dart';
+import 'package:shortzz/common/extensions/string_extension.dart';
+import 'package:shortzz/common/manager/story_view/widgets/story_view.dart';
+import 'package:shortzz/common/widget/custom_image.dart';
+import 'package:shortzz/common/widget/story_ad_view.dart';
+import 'package:shortzz/common/manager/session_manager.dart';
+import 'package:shortzz/common/controller/base_controller.dart';
+import 'package:shortzz/screen/report_sheet/report_sheet.dart';
+import 'package:shortzz/common/service/api/user_service.dart';
+import 'package:shortzz/common/widget/custom_popup_menu_button.dart';
+import 'package:shortzz/common/widget/full_name_with_blue_tick.dart';
+import 'package:shortzz/languages/languages_keys.dart';
+import 'package:shortzz/model/chat/chat_thread.dart';
+import 'package:shortzz/model/livestream/app_user.dart';
+import 'package:shortzz/model/post_story/story/story_model.dart';
+import 'package:shortzz/model/user_model/user_model.dart';
+import 'package:shortzz/screen/chat_screen/chat_screen.dart';
+import 'package:shortzz/screen/camera_edit_screen/camera_edit_screen.dart';
+import 'package:shortzz/screen/camera_screen/camera_screen_controller.dart';
+import 'package:shortzz/screen/story_view_screen/story_view_screen_controller.dart';
+import 'package:shortzz/utilities/app_res.dart';
+import 'package:shortzz/utilities/asset_res.dart';
+import 'package:shortzz/utilities/text_style_custom.dart';
+import 'package:shortzz/utilities/theme_res.dart';
+
+class StoryViewSheet extends StatelessWidget {
+  final List<User> stories;
+  final int userIndex;
+  final Function(Story? story) onUpdateDeleteStory;
+
+  const StoryViewSheet(
+      {super.key,
+      required this.stories,
+      required this.userIndex,
+      required this.onUpdateDeleteStory});
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = Get.put(StoryViewScreenController(stories, userIndex,
+        PageController(initialPage: userIndex), onUpdateDeleteStory));
+    return Container(
+      color: blackPure(context),
+      child: SafeArea(
+        child: PageView.builder(
+          controller: controller.pageController,
+          itemCount: stories.length,
+          onPageChanged: controller.onPageChange,
+          itemBuilder: (context, storyIndex) {
+            // Safety check: ensure stories list has items
+            if (controller.stories.isEmpty || storyIndex >= controller.stories.length) {
+              return const Center(
+                child: CircularProgressIndicator(),
+              );
+            }
+            return StoryView(
+              storyItems: controller.stories[storyIndex],
+              inline: true,
+              onStoryShow: controller.onStoryShow,
+              onBack: controller.onPreviousUser,
+              onComplete: controller.onNext,
+              progressPosition: ProgressPosition.top,
+              repeat: false,
+              controller: controller.storyController,
+              overlayWidget: (item) {
+                User? myUser = SessionManager.instance.getUser();
+
+                bool isMyStory = item.story?.userId == myUser?.id;
+                User? user = item.story?.user;
+                
+                // Check if this is an ad story
+                bool isAd = false;
+                Map<String, dynamic>? adMetadata;
+                try {
+                  final metaStr = item.story?.metadata;
+                  if (metaStr != null && metaStr.isNotEmpty) {
+                    adMetadata = jsonDecode(metaStr) as Map<String, dynamic>?;
+                    isAd = adMetadata?['isAd'] == true;
+                  }
+                } catch (_) {}
+                
+                // If it's an ad, show the ad overlay
+                if (isAd && adMetadata != null) {
+                  return StoryAdView(
+                    imageUrl: item.story?.content?.addBaseURL(),
+                    sponsoredLabel: adMetadata['sponsoredLabel'] ?? 'Sponsored',
+                    title: adMetadata['title'],
+                    cta: adMetadata['cta'] ?? 'Learn more',
+                    destinationUrl: adMetadata['destinationUrl'],
+                    adId: adMetadata['adId'],
+                  );
+                }
+
+                Future<void> downloadMyStory() async {
+                  if (!isMyStory) return;
+                  final s = item.story;
+                  final rawUrl = (s?.content ?? '').toString();
+                  final url = rawUrl.addBaseURL();
+                  if (url.trim().isEmpty) return;
+
+                  final type = (s?.type ?? -1).toInt();
+                  if (type != 0 && type != 1) return;
+
+                  try {
+                    controller.storyController.pause();
+                  } catch (_) {}
+
+                  BaseController.share.showLoader();
+                  try {
+                    final hasAccess = await Gal.hasAccess();
+                    if (!hasAccess) {
+                      final granted = await Gal.requestAccess();
+                      if (!granted) {
+                        BaseController.share.stopLoader();
+                        BaseController.share
+                            .showSnackBar(LKey.downloadingFailed.tr);
+                        return;
+                      }
+                    }
+
+                    final file = await DefaultCacheManager().getSingleFile(url);
+                    String path = file.path;
+                    
+                    // Ensure extension for Gal
+                    if (type == 1 && !path.endsWith('.mp4')) {
+                         final tmp = '${path}_temp.mp4';
+                         await file.copy(tmp);
+                         path = tmp;
+                    } else if (type == 0 && !path.endsWith('.jpg') && !path.endsWith('.png')) {
+                         final tmp = '${path}_temp.jpg';
+                         await file.copy(tmp);
+                         path = tmp;
+                    }
+
+                    if (type == 1) {
+                      await Gal.putVideo(path);
+                    } else {
+                      await Gal.putImage(path);
+                    }
+                    BaseController.share.stopLoader();
+                    BaseController.share
+                        .showSnackBar(LKey.downloadCompletedSuccessfully.tr);
+                  } on GalException catch (e) {
+                    BaseController.share.stopLoader();
+                    Loggers.error('Story download GalException: $e');
+                    BaseController.share.showSnackBar(LKey.downloadingFailed.tr);
+                  } catch (e) {
+                    BaseController.share.stopLoader();
+                    Loggers.error('Story download error: $e');
+                    BaseController.share.showSnackBar(LKey.downloadingFailed.tr);
+                  } finally {
+                    try {
+                      controller.storyController.play();
+                    } catch (_) {}
+                  }
+                }
+
+                Future<bool> hasQuestionSticker() async {
+                  final storyId = (item.id).toInt();
+                  if (storyId <= 0) return false;
+                  try {
+                    final snap = await FirebaseFirestore.instance
+                        .collection('story_editor_meta')
+                        .doc(storyId.toString())
+                        .get();
+                    final data = snap.data();
+                    final texts = (data?['texts'] as List?) ?? const [];
+                    for (final e in texts) {
+                      if (e is! Map) continue;
+                      final m = Map<String, dynamic>.from(e);
+                      final t = (m['text'] ?? '').toString();
+                      if (t.trimLeft().startsWith('__qst__:')) return true;
+                    }
+                  } catch (_) {}
+                  return false;
+                }
+
+                void openQuestionsInbox() {
+                  final storyId = (item.id).toInt();
+                  if (storyId <= 0) return;
+                  controller.storyController.pause();
+
+                  Get.bottomSheet(
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 14),
+                      decoration: BoxDecoration(
+                        color: blackPure(context),
+                        borderRadius: const BorderRadius.vertical(
+                          top: Radius.circular(16),
+                        ),
+                      ),
+                      child: SafeArea(
+                        top: false,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    'Questions',
+                                    style: TextStyleCustom.outFitMedium500(
+                                      color: whitePure(context),
+                                      fontSize: 16,
+                                    ),
+                                  ),
+                                ),
+                                InkWell(
+                                  onTap: Get.back,
+                                  child: Icon(Icons.close,
+                                      color: whitePure(context), size: 22),
+                                )
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+                            StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                              stream: FirebaseFirestore.instance
+                                  .collection('story_question_replies')
+                                  .doc(storyId.toString())
+                                  .collection('items')
+                                  .orderBy('created_at', descending: true)
+                                  .limit(100)
+                                  .snapshots(),
+                              builder: (context, snap) {
+                                final docs = snap.data?.docs ?? const [];
+                                if (docs.isEmpty) {
+                                  return Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 24),
+                                    child: Center(
+                                      child: Text(
+                                        LKey.noData.tr,
+                                        style:
+                                            TextStyleCustom.outFitLight300(
+                                          color: whitePure(context),
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                }
+
+                                return ConstrainedBox(
+                                  constraints: BoxConstraints(
+                                    maxHeight:
+                                        MediaQuery.of(context).size.height *
+                                            0.55,
+                                  ),
+                                  child: ListView.separated(
+                                    shrinkWrap: true,
+                                    itemCount: docs.length,
+                                    separatorBuilder: (_, __) => Divider(
+                                      height: 1,
+                                      color:
+                                          Colors.white.withValues(alpha: 0.08),
+                                    ),
+                                    itemBuilder: (context, idx) {
+                                      final d = docs[idx];
+                                      final data = d.data();
+                                      final senderId =
+                                          (data['sender_id'] as num?)?.toInt();
+                                      final username =
+                                          (data['sender_username'] ?? '')
+                                              .toString();
+                                      final fullname =
+                                          (data['sender_fullname'] ?? '')
+                                              .toString();
+                                      final profile =
+                                          (data['sender_profile'] ?? '')
+                                              .toString();
+                                      final answer = (data['answer'] ?? '')
+                                          .toString()
+                                          .trim();
+                                      final dynamic repliedRaw = data['replied'];
+                                      final replied = repliedRaw == true ||
+                                          repliedRaw == 1 ||
+                                          repliedRaw == '1';
+
+                                      final displayName =
+                                          (username.isNotEmpty ? username : fullname)
+                                              .trim();
+
+                                      return InkWell(
+                                        onTap: replied
+                                            ? null
+                                            : () async {
+                                                if (senderId == null ||
+                                                    senderId <= 0) {
+                                                  return;
+                                                }
+
+                                                final mention = username
+                                                        .isNotEmpty
+                                                    ? '@$username'
+                                                    : (fullname.isNotEmpty
+                                                        ? fullname
+                                                        : '@user');
+
+                                                final content = PostStoryContent(
+                                                  type: PostStoryContentType.storyText,
+                                                  content: '',
+                                                  thumbNail: '',
+                                                  duration: AppRes.storyImageAndTextDuration,
+                                                  additionalContent: [
+                                                    '__prefill_text__:$mention',
+                                                    '__qrep__:$mention|$answer',
+                                                    '__qreply_to__:$storyId:${d.id}:$senderId:$username:$fullname:$profile:$answer',
+                                                  ],
+                                                );
+
+                                                Get.back();
+                                                await Get.to(() =>
+                                                    CameraEditScreen(content: content));
+                                              },
+                                        child: Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                              vertical: 10),
+                                          child: Row(
+                                            children: [
+                                              ClipRRect(
+                                                borderRadius:
+                                                    BorderRadius.circular(30),
+                                                child: CustomImage(
+                                                  fit: BoxFit.cover,
+                                                  size: const Size(36, 36),
+                                                  image: profile.addBaseURL(),
+                                                  fullName: fullname,
+                                                ),
+                                              ),
+                                              const SizedBox(width: 10),
+                                              Expanded(
+                                                child: Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
+                                                  children: [
+                                                    Text(
+                                                      displayName,
+                                                      style: TextStyleCustom
+                                                          .outFitMedium500(
+                                                        color:
+                                                            whitePure(context),
+                                                        fontSize: 13,
+                                                      ),
+                                                      maxLines: 1,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                    ),
+                                                    const SizedBox(height: 3),
+                                                    Text(
+                                                      answer,
+                                                      style: TextStyleCustom
+                                                          .outFitLight300(
+                                                        color: whitePure(context)
+                                                            .withValues(
+                                                                alpha: 0.8),
+                                                        fontSize: 12,
+                                                      ),
+                                                      maxLines: 2,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                              if (replied)
+                                                Text(
+                                                  'Replied',
+                                                  style: TextStyleCustom
+                                                      .outFitLight300(
+                                                    color: whitePure(context)
+                                                        .withValues(alpha: 0.7),
+                                                    fontSize: 12,
+                                                  ),
+                                                )
+                                              else
+                                                Text(
+                                                  'Reply',
+                                                  style: TextStyleCustom
+                                                      .outFitMedium500(
+                                                    color: themeAccentSolid(context),
+                                                    fontSize: 12,
+                                                  ),
+                                                ),
+                                            ],
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    isScrollControlled: true,
+                    ignoreSafeArea: false,
+                  ).whenComplete(() {
+                    controller.storyController.play();
+                  });
+                }
+
+                void openViewersSheet() {
+                  final storyId = (item.id).toInt();
+                  final ids = <int>{};
+                  for (final raw in item.viewedByUsersIds) {
+                    final parsed = int.tryParse(raw);
+                    if (parsed != null && parsed > 0) {
+                      ids.add(parsed);
+                    }
+                  }
+
+                  controller.storyController.pause();
+                  Get.bottomSheet(
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 14),
+                      decoration: BoxDecoration(
+                        color: blackPure(context),
+                        borderRadius: const BorderRadius.vertical(
+                          top: Radius.circular(16),
+                        ),
+                      ),
+                      child: SafeArea(
+                        top: false,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    LKey.view.tr,
+                                    style: TextStyleCustom.outFitMedium500(
+                                      color: whitePure(context),
+                                      fontSize: 16,
+                                    ),
+                                  ),
+                                ),
+                                InkWell(
+                                  onTap: Get.back,
+                                  child: Icon(Icons.close,
+                                      color: whitePure(context), size: 22),
+                                )
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+                            if (storyId > 0)
+                              StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                                stream: FirebaseFirestore.instance
+                                    .collection('story_reactions')
+                                    .doc(storyId.toString())
+                                    .collection('items')
+                                    .orderBy('created_at', descending: true)
+                                    .limit(30)
+                                    .snapshots(),
+                                builder: (context, snap) {
+                                  final docs = snap.data?.docs ?? const [];
+                                  if (docs.isEmpty) {
+                                    return const SizedBox();
+                                  }
+
+                                  return ConstrainedBox(
+                                    constraints: BoxConstraints(
+                                      maxHeight:
+                                          MediaQuery.of(context).size.height *
+                                              0.28,
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'Reactions',
+                                          style: TextStyleCustom.outFitMedium500(
+                                            color: whitePure(context),
+                                            fontSize: 14,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 8),
+                                        Expanded(
+                                          child: ListView.separated(
+                                            shrinkWrap: true,
+                                            itemCount: docs.length,
+                                            separatorBuilder: (_, __) => Divider(
+                                              height: 1,
+                                              color: Colors.white
+                                                  .withValues(alpha: 0.08),
+                                            ),
+                                            itemBuilder: (context, idx) {
+                                              final data = docs[idx].data();
+                                              final senderId =
+                                                  (data['sender_id'] as num?)
+                                                      ?.toInt();
+                                              final type =
+                                                  (data['type'] ?? '').toString();
+                                              final username =
+                                                  (data['sender_username'] ?? '')
+                                                      .toString();
+                                              final fullname =
+                                                  (data['sender_fullname'] ?? '')
+                                                      .toString();
+                                              final profile =
+                                                  (data['sender_profile'] ?? '')
+                                                      .toString();
+                                              final isVerify =
+                                                  (data['sender_is_verify'] as num?)
+                                                      ?.toInt();
+                                              final gift =
+                                                  data['gift'] as Map<String, dynamic>?;
+                                              final giftImg =
+                                                  (gift?['image'] ?? '').toString();
+
+                                              return InkWell(
+                                                onTap: () async {
+                                                  final myId = SessionManager
+                                                      .instance
+                                                      .getUserID();
+                                                  if (myId <= 0 ||
+                                                      senderId == null ||
+                                                      senderId <= 0) {
+                                                    return;
+                                                  }
+                                                  final ids = [myId, senderId]
+                                                    ..sort();
+                                                  final conversationId =
+                                                      '${ids[0]}_${ids[1]}';
+
+                                                  final thread = ChatThread(
+                                                    userId: senderId,
+                                                    conversationId:
+                                                        conversationId,
+                                                    chatType: ChatType.approved,
+                                                    msgCount: 0,
+                                                    isDeleted: false,
+                                                    deletedId: 0,
+                                                    iBlocked: false,
+                                                    iAmBlocked: false,
+                                                  );
+                                                  thread.chatUser = AppUser(
+                                                    userId: senderId,
+                                                    username: username,
+                                                    fullname: fullname,
+                                                    profile: profile,
+                                                    isVerify: isVerify,
+                                                  );
+
+                                                  Get.back();
+                                                  await Get.to(() => ChatScreen(
+                                                      conversationUser: thread));
+                                                },
+                                                child: Padding(
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                          vertical: 10),
+                                                  child: Row(
+                                                    children: [
+                                                      ClipRRect(
+                                                        borderRadius:
+                                                            BorderRadius.circular(
+                                                                30),
+                                                        child: CustomImage(
+                                                          fit: BoxFit.cover,
+                                                          size: const Size(36, 36),
+                                                          image: profile.addBaseURL(),
+                                                          fullName: fullname,
+                                                        ),
+                                                      ),
+                                                      const SizedBox(width: 10),
+                                                      Expanded(
+                                                        child: Text(
+                                                          (username.isNotEmpty
+                                                                  ? username
+                                                                  : fullname)
+                                                              .trim(),
+                                                          style: TextStyleCustom
+                                                              .outFitMedium500(
+                                                            color:
+                                                                whitePure(context),
+                                                            fontSize: 13,
+                                                          ),
+                                                          maxLines: 1,
+                                                          overflow: TextOverflow
+                                                              .ellipsis,
+                                                        ),
+                                                      ),
+                                                      if (type == 'gift')
+                                                        ClipRRect(
+                                                          borderRadius:
+                                                              BorderRadius.circular(
+                                                                  8),
+                                                          child: CustomImage(
+                                                            fit: BoxFit.cover,
+                                                            size:
+                                                                const Size(28, 28),
+                                                            image: giftImg.isEmpty
+                                                                ? ''
+                                                                : giftImg.addBaseURL(),
+                                                          ),
+                                                        )
+                                                      else
+                                                        Image.asset(
+                                                          AssetRes.icFillHeart,
+                                                          width: 18,
+                                                          height: 18,
+                                                          color:
+                                                              themeAccentSolid(context),
+                                                        ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              );
+                                            },
+                                          ),
+                                        ),
+                                        const SizedBox(height: 10),
+                                        Divider(
+                                          height: 1,
+                                          color:
+                                              Colors.white.withValues(alpha: 0.12),
+                                        ),
+                                        const SizedBox(height: 10),
+                                      ],
+                                    ),
+                                  );
+                                },
+                              ),
+                            FutureBuilder<List<User?>>( 
+                              future: Future.wait(
+                                ids.map((e) =>
+                                    UserService.instance.fetchUserDetails(
+                                        userId: e)),
+                              ),
+                              builder: (context, snapshot) {
+                                if (snapshot.connectionState ==
+                                    ConnectionState.waiting) {
+                                  return Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 24),
+                                    child: Center(
+                                      child: CircularProgressIndicator(
+                                        color: whitePure(context),
+                                      ),
+                                    ),
+                                  );
+                                }
+                                final users = (snapshot.data ?? [])
+                                    .whereType<User>()
+                                    .toList();
+                                if (users.isEmpty) {
+                                  return Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 24),
+                                    child: Center(
+                                      child: Text(
+                                        LKey.noData.tr,
+                                        style:
+                                            TextStyleCustom.outFitLight300(
+                                          color: whitePure(context),
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                }
+
+                                return ConstrainedBox(
+                                  constraints: BoxConstraints(
+                                    maxHeight:
+                                        MediaQuery.of(context).size.height *
+                                            0.55,
+                                  ),
+                                  child: ListView.separated(
+                                    shrinkWrap: true,
+                                    itemCount: users.length,
+                                    separatorBuilder: (_, __) => Divider(
+                                      height: 1,
+                                      color:
+                                          Colors.white.withValues(alpha: 0.08),
+                                    ),
+                                    itemBuilder: (context, index) {
+                                      final u = users[index];
+                                      return InkWell(
+                                        onTap: () async {
+                                          final myId =
+                                              SessionManager.instance.getUserID();
+                                          final otherId = u.id;
+                                          if (myId <= 0 || otherId == null) {
+                                            return;
+                                          }
+
+                                          final ids = [myId, otherId]..sort();
+                                          final conversationId =
+                                              '${ids[0]}_${ids[1]}';
+
+                                          final thread = ChatThread(
+                                            userId: otherId,
+                                            conversationId: conversationId,
+                                            chatType: ChatType.approved,
+                                            msgCount: 0,
+                                            isDeleted: false,
+                                            deletedId: 0,
+                                            iBlocked: false,
+                                            iAmBlocked: false,
+                                          );
+                                          thread.chatUser = AppUser(
+                                            userId: otherId,
+                                            username: u.username,
+                                            fullname: u.fullname,
+                                            profile: u.profilePhoto,
+                                            isVerify: u.isVerify,
+                                          );
+
+                                          Get.back();
+                                          await Get.to(() =>
+                                              ChatScreen(conversationUser: thread));
+                                        },
+                                        child: Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                              vertical: 10),
+                                          child: Row(
+                                            children: [
+                                              ClipRRect(
+                                                borderRadius:
+                                                    BorderRadius.circular(30),
+                                                child: CustomImage(
+                                                  fit: BoxFit.cover,
+                                                  size: const Size(36, 36),
+                                                  image: u.profilePhoto
+                                                      ?.addBaseURL(),
+                                                  fullName: u.fullname,
+                                                ),
+                                              ),
+                                              const SizedBox(width: 10),
+                                              Expanded(
+                                                child: Text(
+                                                  u.username ?? u.fullname ?? '',
+                                                  style: TextStyleCustom
+                                                      .outFitMedium500(
+                                                    color: whitePure(context),
+                                                    fontSize: 13,
+                                                  ),
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    isScrollControlled: true,
+                    ignoreSafeArea: false,
+                  ).whenComplete(() {
+                    controller.storyController.play();
+                  });
+                }
+
+                return SizedBox(
+                  height: 75,
+                  width: double.infinity,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 15, vertical: 20),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      spacing: 8,
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(30),
+                          child: CustomImage(
+                            fit: BoxFit.cover,
+                            size: const Size(35, 35),
+                            image: user?.profilePhoto?.addBaseURL(),
+                            fullName: user?.fullname,
+                          ),
+                        ),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              FullNameWithBlueTick(
+                                userId: user?.id,
+                                username: user?.fullname,
+                                isVerify: user?.isVerify,
+                                fontColor: whitePure(context),
+                                fontSize: 12,
+                                iconSize: 17,
+                                child: Row(
+                                  children: [
+                                    Text(
+                                      item.story?.date ?? '',
+                                      style: TextStyleCustom.outFitLight300(
+                                        color: whitePure(context),
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                    if (item.story?.audienceType == 1) ...[
+                                      const SizedBox(width: 5),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: Colors.green,
+                                          borderRadius: BorderRadius.circular(4),
+                                        ),
+                                        child: const Row(
+                                          children: [
+                                            Icon(Icons.star,
+                                                color: Colors.white, size: 10),
+                                            SizedBox(width: 2),
+                                            Text('Close Friends',
+                                                style: TextStyle(
+                                                    color: Colors.white,
+                                                    fontSize: 10)),
+                                          ],
+                                        ),
+                                      )
+                                    ]
+                                  ],
+                                ),
+                              ),
+                              if (item.story?.music != null)
+                                Row(
+                                  spacing: 5,
+                                  children: [
+                                    Image.asset(AssetRes.icMusic,
+                                        width: 12, height: 12),
+                                    Expanded(
+                                      child: Text(
+                                        '${item.story?.music?.title ?? ''}'
+                                        '${item.story?.music?.title != null ? ' • ' : ''}'
+                                        '${item.story?.music?.artist ?? ''}',
+                                        style: TextStyleCustom.outFitLight300(
+                                          color: whitePure(context),
+                                          fontSize: 12,
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                            ],
+                          ),
+                        ),
+                        Obx(
+                          () {
+                            bool isModerator =
+                                SessionManager.instance.isModerator.value == 1;
+                            bool shouldDeleteStory =
+                                user?.id == myUser?.id || isModerator;
+
+                            return CustomPopupMenuButton(
+                              items: [
+                                if (shouldDeleteStory)
+                                  MenuItem(
+                                    LKey.delete.tr,
+                                    () {
+                                      Future.delayed(
+                                          const Duration(milliseconds: 50), () {
+                                        controller.storyController.pause();
+                                      });
+                                      controller.onStoryDelete(item.story,
+                                          isModerator:
+                                              (!isMyStory && isModerator));
+                                    },
+                                  ),
+                                if (!isMyStory)
+                                  MenuItem(
+                                    LKey.report.tr,
+                                    () {
+                                      controller.storyController.pause();
+                                      Get.bottomSheet(
+                                        ReportSheet(
+                                          id: (item.story?.id ?? -1).toInt(),
+                                          reportType: ReportType.post,
+                                        ),
+                                        isScrollControlled: true,
+                                      ).then((_) {
+                                        controller.storyController.play();
+                                      });
+                                    },
+                                  ),
+                              ],
+                              onCanceled: controller.storyController.play,
+                              onOpened: controller.storyController.pause,
+                              child: Padding(
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 5),
+                                child: Image.asset(AssetRes.icMore1,
+                                    height: 25,
+                                    width: 25,
+                                    color: whitePure(context)),
+                              ),
+                            );
+                          },
+                        ),
+                        if (isMyStory)
+                          InkWell(
+                            onTap: openViewersSheet,
+                            child: Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 8),
+                              child: Icon(
+                                Icons.remove_red_eye_outlined,
+                                size: 22,
+                                color: whitePure(context),
+                              ),
+                            ),
+                          ),
+                        if (isMyStory)
+                          FutureBuilder<bool>(
+                            future: hasQuestionSticker(),
+                            builder: (context, snap) {
+                              final ok = snap.data == true;
+                              if (!ok) return const SizedBox();
+                              return InkWell(
+                                onTap: openQuestionsInbox,
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 8),
+                                  child: Icon(
+                                    Icons.question_answer_outlined,
+                                    size: 22,
+                                    color: whitePure(context),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        if (isMyStory &&
+                            ((item.story?.type ?? -1) == 0 ||
+                                (item.story?.type ?? -1) == 1))
+                          InkWell(
+                            onTap: downloadMyStory,
+                            child: Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 8),
+                              child: Icon(
+                                Icons.download_rounded,
+                                size: 22,
+                                color: whitePure(context),
+                              ),
+                            ),
+                          ),
+                        InkWell(
+                          onTap: Get.back,
+                          child: Image.asset(AssetRes.icClose1,
+                              width: 28, height: 28, color: whitePure(context)),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            );
+          },
+        ),
+      ),
+    );
+  }
+}

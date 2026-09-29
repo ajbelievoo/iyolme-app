@@ -1,0 +1,380 @@
+import 'package:figma_squircle_updated/figma_squircle.dart';
+import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:shortzz/languages/languages_keys.dart';
+import 'package:shortzz/screen/camera_edit_screen/text_story/story_text_view_controller.dart';
+import 'package:shortzz/screen/camera_edit_screen/text_story/widget/story_text_font_color.dart';
+import 'package:shortzz/screen/camera_edit_screen/text_story/widget/story_text_font_opacity.dart';
+import 'package:shortzz/screen/camera_edit_screen/text_story/widget/story_text_font_style.dart';
+import 'package:shortzz/screen/camera_edit_screen/text_story/widget/story_text_font_widget.dart';
+import 'package:shortzz/utilities/app_res.dart';
+
+import 'package:shortzz/utilities/text_style_custom.dart';
+import 'package:shortzz/utilities/theme_res.dart';
+import 'package:uuid/uuid.dart';
+
+class TextEditorSheet extends StatelessWidget {
+  final TextWidgetData data;
+
+  const TextEditorSheet({super.key, required this.data});
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = Get.find<StoryTextViewController>();
+    final textController = TextEditingController(text: data.text.trim());
+
+    controller
+      ..selectedTextOpacity.value = data.opacity
+      ..selectedFontFamily.value = data.googleFontFamily
+      ..selectedColor.value = data.fontColor
+      ..selectedAlignment.value = data.fontAlign
+      ..selectedFontSize.value = data.fontSize;
+
+    return Container(
+      color: blackPure(context).withValues(alpha: 0.4),
+      child: Column(
+        children: [
+          SafeArea(
+            bottom: false,
+            minimum: EdgeInsets.only(top: AppBar().preferredSize.height),
+            child: ConfirmButton(
+                controller: controller,
+                data: data,
+                textController: textController),
+          ),
+          Expanded(
+              child: CustomStoryTextField(
+                  controller: controller, textController: textController)),
+          Obx(() {
+            final items = controller.mentionSuggestions;
+            final isLoading = controller.isMentionLoading.value;
+            if (!isLoading && items.isEmpty) return const SizedBox();
+            return Container(
+              width: double.infinity,
+              constraints: const BoxConstraints(maxHeight: 210),
+              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: ShapeDecoration(
+                color: blackPure(context).withValues(alpha: 0.75),
+                shape: SmoothRectangleBorder(
+                  borderRadius: SmoothBorderRadius(cornerRadius: 14),
+                  side: BorderSide(color: whitePure(context).withAlpha(24)),
+                ),
+              ),
+              child: isLoading
+                  ? Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: whitePure(context),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Text(
+                            'Searching...',
+                            style: TextStyleCustom.outFitRegular400(
+                              fontSize: 13,
+                              color: whitePure(context),
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  : ListView.separated(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      shrinkWrap: true,
+                      itemCount: items.length,
+                      separatorBuilder: (_, __) => Divider(
+                        height: 1,
+                        color: whitePure(context).withAlpha(18),
+                      ),
+                      itemBuilder: (context, index) {
+                        final u = items[index];
+                        final username = (u.username ?? '').trim();
+                        final fullname = (u.fullname ?? '').trim();
+                        if (username.isEmpty) return const SizedBox();
+                        return InkWell(
+                          onTap: () {
+                            controller.insertMentionFromSuggestion(
+                              textController,
+                              username,
+                            );
+                          },
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 10),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        '@$username',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyleCustom.outFitMedium500(
+                                          fontSize: 14,
+                                          color: whitePure(context),
+                                        ),
+                                      ),
+                                      if (fullname.isNotEmpty) ...[
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          fullname,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style:
+                                              TextStyleCustom.outFitRegular400(
+                                            fontSize: 12,
+                                            color: whitePure(context)
+                                                .withAlpha(170),
+                                          ),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+            );
+          }),
+          StoryTextEditorToolbar(controller: controller),
+        ],
+      ),
+    );
+  }
+}
+
+class ConfirmButton extends StatelessWidget {
+  final StoryTextViewController controller;
+  final TextEditingController textController;
+  final TextWidgetData data;
+
+  const ConfirmButton(
+      {super.key,
+      required this.controller,
+      required this.textController,
+      required this.data});
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: AlignmentDirectional.topEnd,
+      child: InkWell(
+        onTap: () {
+          TextWidgetData data1 = data;
+          data1.fontSize = controller.selectedFontSize.value;
+          Get.back(
+              result: controller.createUpdatedData(
+                  data, textController.text.trim()));
+        },
+        child: Container(
+          height: 40,
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          margin:
+              const EdgeInsets.only(top: 60, right: 10, bottom: 10, left: 10),
+          alignment: Alignment.center,
+          decoration: ShapeDecoration(
+            shape: SmoothRectangleBorder(
+              borderRadius: SmoothBorderRadius(cornerRadius: 30),
+              side: BorderSide(color: whitePure(context), width: 1),
+            ),
+            color: whitePure(context).withValues(alpha: 0.2),
+          ),
+          child: Text(
+            LKey.done.tr,
+            style: TextStyleCustom.outFitRegular400(
+                fontSize: 17, color: whitePure(context)),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class CustomStoryTextField extends StatelessWidget {
+  final StoryTextViewController controller;
+  final TextEditingController textController;
+
+  const CustomStoryTextField(
+      {super.key, required this.controller, required this.textController});
+
+  @override
+  Widget build(BuildContext context) {
+    return Obx(() {
+      return SizedBox(
+        width: Get.width - 50,
+        child: TextField(
+          controller: textController,
+          autofocus: true,
+          onChanged: (_) => controller.onEditorTextChanged(textController),
+          // onTapOutside: (_) => FocusManager.instance.primaryFocus?.unfocus(),
+          textAlignVertical: TextAlignVertical.center,
+          expands: true,
+          maxLines: null,
+          decoration: InputDecoration(
+            border: InputBorder.none,
+            hintText: LKey.typeSomething,
+            // hintStyle: TextStyleCustom.outFitMedium500(
+            //     fontSize: 25, color: whitePure(context), opacity: 0.5),
+            hintStyle: _getTextStyle(
+                font: controller.selectedFontFamily.value,
+                fontSize: controller.selectedFontSize.value,
+                color: controller.selectedColor.value,
+                opacity: 0.5),
+          ),
+          textAlign: controller.selectedAlignment.value.align,
+          style: _getTextStyle(
+              font: controller.selectedFontFamily.value,
+              fontSize: controller.selectedFontSize.value,
+              color: controller.selectedColor.value,
+              opacity: controller.selectedTextOpacity.value),
+          cursorHeight: controller.selectedFontSize.value,
+          cursorColor: whitePure(Get.context!),
+        ),
+      );
+    });
+  }
+
+  TextStyle _getTextStyle(
+      {GoogleFontFamily? font,
+      required double fontSize,
+      required Color color,
+      required double opacity}) {
+    return font?.style.copyWith(
+          fontSize: fontSize,
+          color: color.withValues(alpha: opacity),
+        ) ??
+        TextStyleCustom.outFitMedium500(
+            fontSize: fontSize, color: color, opacity: opacity);
+  }
+}
+
+class StoryTextEditorToolbar extends StatelessWidget {
+  final StoryTextViewController controller;
+
+  const StoryTextEditorToolbar({super.key, required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Obx(() {
+          switch (controller.selectorEditorIndex.value) {
+            case StoryTextEditor.font:
+              return const StoryTextFontWidget();
+            case StoryTextEditor.style:
+              return const StoryTextFontStyle();
+            case StoryTextEditor.color:
+              return const StoryTextFontColor();
+            case StoryTextEditor.opacity:
+              return StoryTextFontOpacity(
+                  progressValue: controller.selectedTextOpacity,
+                  min: 0.0,
+                  max: 1.0);
+            // case StoryTextEditor.textSize:
+
+            // return StoryTextFontOpacity(
+            //     progressValue: controller.selectedFontSize,
+            //     min: AppRes.minFontSize,
+            //     max: AppRes.maxFontSize);
+          }
+        }),
+        Container(
+          decoration: ShapeDecoration(
+            color: blackPure(Get.context!).withValues(alpha: 1),
+            shape: const SmoothRectangleBorder(
+                borderRadius: SmoothBorderRadius.zero),
+          ),
+          padding:
+              const EdgeInsets.only(left: 10, right: 10, top: 10, bottom: 10),
+          child: SafeArea(
+            top: false,
+            bottom: true,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: controller.editorList.map((editor) {
+                return Obx(() {
+                  final isSelected =
+                      controller.selectorEditorIndex.value == editor;
+                  return StoryTextImageWithText(
+                    onTap: () => controller.onEditorTap(editor),
+                    image: editor.image,
+                    text: editor.title,
+                    isSelect: isSelected,
+                  );
+                });
+              }).toList(),
+            ),
+          ),
+        )
+      ],
+    );
+  }
+}
+
+class StoryTextImageWithText extends StatelessWidget {
+  final String image;
+  final String text;
+  final VoidCallback onTap;
+  final bool isSelect;
+
+  const StoryTextImageWithText({
+    super.key,
+    required this.image,
+    required this.text,
+    required this.onTap,
+    required this.isSelect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = isSelect ? whitePure(context) : textLightGrey(context);
+    return InkWell(
+      onTap: onTap,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: [
+          Image.asset(image, width: 30, height: 30, color: color),
+          Text(text,
+              style:
+                  TextStyleCustom.outFitRegular400(fontSize: 12, color: color)),
+        ],
+      ),
+    );
+  }
+}
+
+class TextWidgetData {
+  String id;
+  String text;
+  double top, left, fontSize, fontScale, fontAngle, opacity;
+  GoogleFontFamily? googleFontFamily;
+  Color fontColor;
+  FontAlign fontAlign;
+
+  TextWidgetData({
+    String? id,
+    this.text = '',
+    this.top = 75,
+    this.left = 9,
+    this.fontSize = AppRes.minFontSize,
+    this.fontScale = 1.0,
+    this.fontAngle = 0.0,
+    this.googleFontFamily,
+    this.fontColor = Colors.white,
+    this.fontAlign = FontAlign.center,
+    this.opacity = 1,
+  }) : id = id ?? const Uuid().v1();
+}

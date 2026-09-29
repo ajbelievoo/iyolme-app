@@ -1,0 +1,18 @@
+ÅîÉ•ÉúÅcÄéfile:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/pretty_qr_code-3.6.0/lib/src/painting/decoration/pretty_qr_decoration_tween.dartÇÉimport 'package:flutter/animation.dart';
+
+import 'package:pretty_qr_code/src/painting/decoration/pretty_qr_decoration.dart';
+
+/// An interpolation between two [PrettyQrDecoration]s.
+///
+/// This class specializes the interpolation of [Tween<PrettyQrDecoration>] to
+/// use [PrettyQrDecoration.lerp].
+class PrettyQrDecorationTween extends Tween<PrettyQrDecoration> {
+  /// Creates a QR decoration tween.
+  PrettyQrDecorationTween({super.begin, super.end});
+
+  /// Returns the value this variable has at the given animation clock value.
+  @override
+  PrettyQrDecoration lerp(double t) {
+    return PrettyQrDecoration.lerp(begin, end, t)!;
+  }
+}

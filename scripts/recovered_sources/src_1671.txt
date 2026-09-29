@@ -1,0 +1,25 @@
+Äèfile:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/google_maps_flutter_platform_interface-2.15.0/lib/src/types/polyline_updates.dartÉâ// Copyright 2013 The Flutter Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+import 'types.dart';
+
+/// [Polyline] update events to be applied to the [GoogleMap].
+///
+/// Used in [GoogleMapController] when the map is updated.
+// (Do not re-export)
+class PolylineUpdates extends MapsObjectUpdates<Polyline> {
+  /// Computes [PolylineUpdates] given previous and current [Polyline]s.
+  PolylineUpdates.from(super.previous, super.current)
+    : super.from(objectName: 'polyline');
+
+  /// Set of Polylines to be added in this update.
+  Set<Polyline> get polylinesToAdd => objectsToAdd;
+
+  /// Set of PolylineIds to be removed in this update.
+  Set<PolylineId> get polylineIdsToRemove =>
+      objectIdsToRemove.cast<PolylineId>();
+
+  /// Set of Polylines to be changed in this update.
+  Set<Polyline> get polylinesToChange => objectsToChange;
+}

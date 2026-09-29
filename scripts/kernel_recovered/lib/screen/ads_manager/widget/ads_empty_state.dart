@@ -1,0 +1,67 @@
+import 'package:flutter/material.dart';
+import 'package:shortzz/utilities/theme_res.dart';
+
+class AdsEmptyState extends StatelessWidget {
+  const AdsEmptyState({
+    super.key,
+    required this.title,
+    this.subtitle,
+    this.icon,
+    this.action,
+  });
+
+  final String title;
+  final String? subtitle;
+  final IconData? icon;
+  final Widget? action;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: textLightGrey(context).withValues(alpha: 0.16),
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            icon ?? Icons.inbox_outlined,
+            size: 34,
+            color: textLightGrey(context).withValues(alpha: 0.9),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            title,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontWeight: FontWeight.w800,
+              color: textDarkGrey(context),
+            ),
+          ),
+          if ((subtitle ?? '').trim().isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              subtitle!,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 12,
+                height: 1.35,
+                color: textLightGrey(context),
+              ),
+            ),
+          ],
+          if (action != null) ...[
+            const SizedBox(height: 12),
+            SizedBox(height: 44, child: action!),
+          ],
+        ],
+      ),
+    );
+  }
+}
+D

@@ -1,0 +1,20 @@
+}file:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/petitparser-7.0.2/lib/src/matcher/matches/matches_iterable.dartÅ’import 'dart:collection';
+
+import 'package:meta/meta.dart';
+
+import '../../core/parser.dart';
+import 'matches_iterator.dart';
+
+@immutable
+class MatchesIterable<R> extends IterableBase<R> {
+  const MatchesIterable(this.parser, this.input, this.start, this.overlapping);
+
+  final Parser<R> parser;
+  final String input;
+  final int start;
+  final bool overlapping;
+
+  @override
+  Iterator<R> get iterator =>
+      MatchesIterator<R>(parser, input, start, overlapping);
+}

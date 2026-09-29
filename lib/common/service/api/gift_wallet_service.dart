@@ -1,0 +1,158 @@
+import 'package:shortzz/common/manager/session_manager.dart';
+import 'package:shortzz/common/service/api/api_service.dart';
+import 'package:shortzz/common/service/utils/params.dart';
+import 'package:shortzz/common/service/utils/web_service.dart';
+import 'package:shortzz/model/general/status_model.dart';
+import 'package:shortzz/model/gift_wallet/withdraw_model.dart';
+import 'package:shortzz/model/user_model/user_model.dart';
+import 'package:shortzz/utilities/app_res.dart';
+
+class GiftWalletService {
+  GiftWalletService._();
+
+  static final GiftWalletService instance = GiftWalletService._();
+
+  Future<StatusModel> sendGift({
+    int? userId,
+    int? giftId,
+    String? liveType, // audio | video
+    int? hostId,
+  }) async {
+    final params = <String, dynamic>{
+      Params.userId: userId,
+      Params.giftId: giftId,
+      if (liveType != null && liveType.trim().isNotEmpty)
+        Params.liveType: liveType.trim(),
+      if (hostId != null && hostId > 0) Params.hostId: hostId,
+    };
+    StatusModel response = await ApiService.instance.call(
+      url: WebService.giftWallet.sendGift,
+      fromJson: StatusModel.fromJson,
+      param: params,
+    );
+    return response;
+  }
+
+  Future<StatusModel> convertCreditsToCoins({required int credits}) async {
+    final StatusModel response = await ApiService.instance.call(
+      url: WebService.giftWallet.convertCreditsToCoins,
+      fromJson: StatusModel.fromJson,
+      param: {
+        Params.credits: credits,
+      },
+    );
+    return response;
+  }
+
+  Future<StatusModel> convertMinerPointsToCredits(
+      {required int minerPoints}) async {
+    final StatusModel response = await ApiService.instance.call(
+      url: WebService.giftWallet.convertMinerPointsToCredits,
+      fromJson: StatusModel.fromJson,
+      param: {
+        Params.minerPoints: minerPoints,
+      },
+    );
+    return response;
+  }
+
+  Future<List<Withdraw>> fetchMyWithdrawalRequest({int? lastItemId}) async {
+    WithdrawModel response = await ApiService.instance.call(
+        url: WebService.giftWallet.fetchMyWithdrawalRequest,
+        fromJson: WithdrawModel.fromJson,
+        param: {
+          Params.limit: AppRes.paginationLimit,
+          Params.lastItemId: lastItemId,
+        });
+
+    return response.data ?? [];
+  }
+
+  Future<StatusModel> submitWithdrawalRequest(
+      {required String coins,
+      required String gateway,
+      required String account}) async {
+    final params = {
+      Params.coins: coins,
+      Params.gateway: gateway,
+      Params.account: account
+    };
+
+    try {
+      return await ApiService.instance.call(
+        url: WebService.user.submitWithdrawalRequest,
+        fromJson: StatusModel.fromJson,
+        param: params,
+      );
+    } catch (e) {
+      final msg = e.toString();
+      if (!msg.contains('URL Error: 404')) {
+        rethrow;
+      }
+    }
+
+    StatusModel response = await ApiService.instance.call(
+      url: WebService.giftWallet.submitWithdrawalRequest,
+      fromJson: StatusModel.fromJson,
+      param: params,
+    );
+
+    return response;
+  }
+
+  Future<User?> buyCoins({required int id, String? purchasedAt}) async {
+    UserModel response = await ApiService.instance.call(
+      url: WebService.giftWallet.buyCoins,
+      fromJson: UserModel.fromJson,
+      param: {
+        Params.coinPackageId: id,
+        // Legacy (old flow)
+        Params.purchasedAt: purchasedAt,
+      },
+    );
+    if (response.status == true) {
+      return response.data;
+    }
+    return null;
+  }
+
+  Future<User?> buyCoinsVerified({
+    required int coinPackageId,
+    required String gateway, // google_play | razorpay | paypal | stripe
+    String? purchaseToken,
+    String? transactionId,
+    String? razorpayOrderId,
+    String? razorpayPaymentId,
+    String? razorpaySignature,
+    String? cashfreeOrderId,
+    String? cashfreePaymentId,
+    String? paypalOrderId,
+    String? stripePaymentIntentId,
+  }) async {
+    final user = SessionManager.instance.getUser();
+    UserModel response = await ApiService.instance.call(
+      url: WebService.giftWallet.buyCoins,
+      fromJson: UserModel.fromJson,
+      param: {
+        if (user?.id != null) Params.userId: user?.id,
+        Params.coinPlanId: coinPackageId,
+        Params.gateway: gateway,
+        if (purchaseToken != null) Params.purchaseToken: purchaseToken,
+        if (transactionId != null) Params.transactionId: transactionId,
+        
+        // Legacy params kept just in case
+        if (razorpayOrderId != null) Params.razorpayOrderId: razorpayOrderId,
+        if (razorpayPaymentId != null) Params.razorpayPaymentId: razorpayPaymentId,
+        if (razorpaySignature != null) Params.razorpaySignature: razorpaySignature,
+        if (cashfreeOrderId != null) Params.cashfreeOrderId: cashfreeOrderId,
+        if (cashfreePaymentId != null) Params.cashfreePaymentId: cashfreePaymentId,
+        if (paypalOrderId != null) Params.paypalOrderId: paypalOrderId,
+        if (stripePaymentIntentId != null) Params.stripePaymentIntentId: stripePaymentIntentId,
+      },
+    );
+    if (response.status == true) {
+      return response.data;
+    }
+    return null;
+  }
+}

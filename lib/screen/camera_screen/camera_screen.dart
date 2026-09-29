@@ -1,0 +1,350 @@
+import 'package:deepar_flutter_plus/deepar_flutter_plus.dart';
+import 'package:figma_squircle_updated/figma_squircle.dart';
+import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:retrytech_plugin/retrytech_plugin.dart';
+import 'package:shortzz/common/widget/black_gradient_shadow.dart';
+import 'package:shortzz/common/widget/custom_border_round_icon.dart';
+import 'package:shortzz/common/widget/loader_widget.dart';
+import 'package:shortzz/screen/camera_screen/camera_screen_controller.dart';
+import 'package:shortzz/screen/camera_screen/widget/camera_bottom_view.dart';
+import 'package:shortzz/screen/camera_screen/widget/camera_right_view.dart';
+import 'package:shortzz/screen/camera_screen/widget/camera_top_view.dart';
+import 'package:shortzz/screen/selected_music_sheet/selected_music_sheet_controller.dart';
+import 'package:shortzz/utilities/asset_res.dart';
+import 'package:shortzz/utilities/theme_res.dart';
+
+enum CameraScreenType { post, story }
+
+class CameraScreen extends StatefulWidget {
+  final CameraScreenType cameraType;
+  final SelectedMusic? selectedMusic;
+
+  const CameraScreen({super.key, required this.cameraType, this.selectedMusic});
+
+  @override
+  State<CameraScreen> createState() => _CameraScreenState();
+}
+
+class _CameraScreenState extends State<CameraScreen>
+    with WidgetsBindingObserver {
+  late final CameraScreenController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _controller = Get.put(
+      CameraScreenController(widget.cameraType, widget.selectedMusic.obs),
+    );
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _controller.onAppLifecycleChanged(state);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    if (Get.isRegistered<CameraScreenController>()) {
+      try {
+        Get.delete<CameraScreenController>(force: true);
+      } catch (_) {}
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isReels = widget.cameraType == CameraScreenType.post;
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        _controller.onBackFromScreen();
+      },
+      child: WillPopScope(
+        onWillPop: () async {
+          return await _controller.onBackFromScreen();
+        },
+        child: Scaffold(
+          backgroundColor: blackPure(context),
+          resizeToAvoidBottomInset: false,
+          body: Stack(
+            alignment: Alignment.center,
+            children: [
+              _buildCameraPreview(_controller),
+              if (isReels) _buildGestureGuideOverlay(_controller),
+              if (isReels) _buildFullScreenRecordGesture(_controller),
+              const Align(
+                alignment: Alignment.bottomCenter,
+                child: IgnorePointer(
+                  child: BlackGradientShadow(
+                    height: 150,
+                  ),
+                ),
+              ),
+              _buildCameraUI(context, _controller),
+              Obx(() {
+                final v = _controller.gestureCountdown.value;
+                if (v <= 0) return const SizedBox();
+                return Positioned.fill(
+                  child: IgnorePointer(
+                    child: Container(
+                      color: Colors.black45,
+                      alignment: Alignment.center,
+                      child: Text(
+                        '$v',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 72,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              }),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGestureGuideOverlay(CameraScreenController controller) {
+    return Positioned.fill(
+      child: Obx(() {
+        final show = controller.isGestureControlEnabled.value &&
+            !controller.isRecording.value &&
+            !controller.isStartingRecording.value &&
+            controller.gestureCountdown.value <= 0;
+
+        if (!show) return const SizedBox();
+
+        final isThumb = controller.gestureHintIndex.value == 1;
+        final label = isThumb ? 'Show thumb to record' : 'Show palm to record';
+        final icon = isThumb ? Icons.thumb_up : Icons.back_hand;
+
+        return IgnorePointer(
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  width: 240,
+                  height: 240,
+                  child: Stack(
+                    children: [
+                      _cornerBracket(
+                        alignment: Alignment.topLeft,
+                        border: const Border(
+                          top: BorderSide(color: Colors.white, width: 5),
+                          left: BorderSide(color: Colors.white, width: 5),
+                        ),
+                      ),
+                      _cornerBracket(
+                        alignment: Alignment.topRight,
+                        border: const Border(
+                          top: BorderSide(color: Colors.white, width: 5),
+                          right: BorderSide(color: Colors.white, width: 5),
+                        ),
+                      ),
+                      _cornerBracket(
+                        alignment: Alignment.bottomLeft,
+                        border: const Border(
+                          bottom: BorderSide(color: Colors.white, width: 5),
+                          left: BorderSide(color: Colors.white, width: 5),
+                        ),
+                      ),
+                      _cornerBracket(
+                        alignment: Alignment.bottomRight,
+                        border: const Border(
+                          bottom: BorderSide(color: Colors.white, width: 5),
+                          right: BorderSide(color: Colors.white, width: 5),
+                        ),
+                      ),
+                      Center(
+                        child: Icon(icon, color: Colors.white, size: 72),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(28),
+                    border: Border.all(color: Colors.white24, width: 1),
+                  ),
+                  child: Text(
+                    label,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }),
+    );
+  }
+
+  Widget _cornerBracket({
+    required Alignment alignment,
+    required Border border,
+  }) {
+    return Align(
+      alignment: alignment,
+      child: SizedBox(
+        width: 60,
+        height: 60,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            border: border,
+            borderRadius: BorderRadius.circular(8),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFullScreenRecordGesture(CameraScreenController controller) {
+    return Positioned.fill(
+      child: Obx(() {
+        final canRecord = !controller.isCameraBooting.value &&
+            (!controller.useDeepAr || controller.isDeepARInitialized.value);
+
+        return GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onVerticalDragStart: canRecord
+              ? (details) {
+                  controller.startRecordZoomDrag();
+                }
+              : null,
+          onVerticalDragUpdate: canRecord
+              ? (details) {
+                  controller.updateRecordZoomDrag(details.delta.dy);
+                }
+              : null,
+          onVerticalDragEnd: canRecord
+              ? (_) {
+                  controller.endRecordZoomDrag();
+                }
+              : null,
+          child: const SizedBox.expand(),
+        );
+      }),
+    );
+  }
+
+  Widget _buildCameraPreview(CameraScreenController controller) {
+    final isReels = widget.cameraType == CameraScreenType.post;
+
+    final preview = Obx(() {
+      if (controller.isCameraBooting.value) {
+        return const LoaderWidget();
+      }
+      if (controller.useDeepAr) {
+        final deepArControllerPlus = controller.deepArControllerPlus.value;
+        if (!controller.isDeepARInitialized.value) {
+          return const LoaderWidget();
+        }
+
+        final zoom = controller.currentZoom;
+        final core = DeepArPreviewPlus(deepArControllerPlus);
+
+        if (isReels) {
+          return LayoutBuilder(
+            builder: (context, constraints) {
+              final covered = FittedBox(
+                fit: BoxFit.cover,
+                child: SizedBox(
+                  width: constraints.maxWidth,
+                  height: constraints.maxHeight,
+                  child: core,
+                ),
+              );
+
+              return covered;
+            },
+          );
+        }
+
+        return Transform.scale(
+          scale: deepArControllerPlus.aspectRatio * 0.62,
+          child: Transform.scale(
+            alignment: Alignment.center,
+            scale: zoom,
+            child: core,
+          ),
+        );
+      }
+
+      return RetrytechPlugin.shared.cameraView;
+    });
+
+    if (isReels) {
+      return Positioned.fill(
+        child: ClipRect(
+          child: preview,
+        ),
+      );
+    }
+
+    return AspectRatio(
+      aspectRatio: 0.52,
+      child: ClipSmoothRect(
+        radius: SmoothBorderRadius(cornerRadius: 20, cornerSmoothing: 1),
+        child: preview,
+      ),
+    );
+  }
+
+  Widget _buildCameraUI(
+      BuildContext context, CameraScreenController controller) {
+    return SafeArea(
+      child: Stack(
+        children: [
+          Column(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Obx(() => IgnorePointer(
+                  ignoring: controller.isRecording.value,
+                  child: CameraTopView(cameraType: widget.cameraType))),
+              const Spacer(),
+              if (widget.cameraType == CameraScreenType.story)
+                Obx(() => IgnorePointer(
+                    ignoring: controller.isRecording.value,
+                    child: _buildTextStoryButton(controller))),
+              CameraBottomView(cameraType: widget.cameraType),
+            ],
+          ),
+          Obx(() => IgnorePointer(
+              ignoring: controller.isRecording.value,
+              child: const CameraRightView())),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTextStoryButton(CameraScreenController controller) {
+    return Align(
+      alignment: AlignmentDirectional.centerEnd,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 17),
+        child: CustomBorderRoundIcon(
+          image: AssetRes.icText,
+          onTap: controller.onNavigateTextStory,
+        ),
+      ),
+    );
+  }
+}

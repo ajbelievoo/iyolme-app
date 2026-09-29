@@ -1,0 +1,20 @@
+€•file:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/webview_flutter_platform_interface-2.15.1/lib/src/types/javascript_console_message.dart‚Z// Copyright 2013 The Flutter Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+import 'package:meta/meta.dart';
+
+import 'javascript_log_level.dart';
+
+/// Represents a console message written to the JavaScript console.
+@immutable
+class JavaScriptConsoleMessage {
+  /// Creates a [JavaScriptConsoleMessage].
+  const JavaScriptConsoleMessage({required this.level, required this.message});
+
+  /// The severity of a JavaScript log message.
+  final JavaScriptLogLevel level;
+
+  /// The message written to the console.
+  final String message;
+}

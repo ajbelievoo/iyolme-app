@@ -1,0 +1,16 @@
+ÇÁbfile:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/logger-2.7.0/lib/src/log_output.dartÅèimport 'dart:async';
+
+import 'output_event.dart';
+
+/// Log output receives a [OutputEvent] from [LogPrinter] and sends it to the
+/// desired destination.
+///
+/// This can be an output stream, a file or a network target. [LogOutput] may
+/// cache multiple log messages.
+abstract class LogOutput {
+  Future<void> init() async {}
+
+  void output(OutputEvent event);
+
+  Future<void> destroy() async {}
+}

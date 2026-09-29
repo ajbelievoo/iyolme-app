@@ -1,0 +1,166 @@
+<file:///E:/flutterapp_pro/lib/model/livestream/app_user.dart“§import 'package:flutter/foundation.dart';
+
+class AppUser {
+  int? userId;
+  String? username;
+  String? fullname;
+  String? profile;
+  int? isVerify;
+  String? identity;
+  int? audioCallPrice;
+  int? videoCallPrice;
+  int? callPrice;
+
+  String? professionalType;
+  int? professionalEnabled;
+
+  AppUser(
+      {this.userId,
+      this.username,
+      this.fullname,
+      this.profile,
+      this.isVerify,
+      this.identity,
+      this.audioCallPrice,
+      this.videoCallPrice,
+      this.callPrice,
+      this.professionalType,
+      this.professionalEnabled});
+
+  AppUser.fromJson(Map<String, dynamic> json) {
+    final dynamic rawId = json['user_id'] ?? json['id'] ?? json['userId'] ?? json['uid'];
+    if (rawId is num) {
+      userId = rawId.toInt();
+    } else if (rawId is String) {
+      userId = int.tryParse(rawId.trim());
+    } else {
+      userId = null;
+    }
+    identity = json['identity'];
+    username = json['username'];
+    fullname = json['fullname'];
+    profile = json['profile'];
+    final rawAudioCallPrice =
+        json['audio_call_price'] ?? json['audioCallPrice'] ?? json['audio_callPrice'];
+    if (rawAudioCallPrice is num) {
+      audioCallPrice = rawAudioCallPrice.toInt();
+    } else if (rawAudioCallPrice is String) {
+      audioCallPrice = int.tryParse(rawAudioCallPrice.trim());
+    } else {
+      audioCallPrice = null;
+    }
+
+    final rawVideoCallPrice =
+        json['video_call_price'] ?? json['videoCallPrice'] ?? json['video_callPrice'];
+    if (rawVideoCallPrice is num) {
+      videoCallPrice = rawVideoCallPrice.toInt();
+    } else if (rawVideoCallPrice is String) {
+      videoCallPrice = int.tryParse(rawVideoCallPrice.trim());
+    } else {
+      videoCallPrice = null;
+    }
+    final rawCallPrice = json['call_price'] ?? json['callPrice'];
+    if (rawCallPrice is num) {
+      callPrice = rawCallPrice.toInt();
+    } else if (rawCallPrice is String) {
+      callPrice = int.tryParse(rawCallPrice.trim());
+    } else {
+      callPrice = null;
+    }
+
+    final rawType = json['professional_type'] ??
+        json['dashboard_type'] ??
+        json['professionalType'] ??
+        json['user_type'] ??
+        json['type'];
+    final v = '${rawType ?? ''}'.trim();
+    professionalType = v.isEmpty ? null : v;
+
+    final hasEnabledKey = json.containsKey('professional_enabled') ||
+        json.containsKey('professionalEnabled') ||
+        json.containsKey('is_professional') ||
+        json.containsKey('isProfessional');
+    if (!hasEnabledKey) {
+      professionalEnabled = null;
+    } else {
+      final rawEnabled = json['professional_enabled'] ??
+          json['professionalEnabled'] ??
+          json['is_professional'] ??
+          json['isProfessional'];
+      if (rawEnabled == null) {
+        professionalEnabled = null;
+      } else if (rawEnabled is bool) {
+        professionalEnabled = rawEnabled ? 1 : 0;
+      } else if (rawEnabled is num) {
+        professionalEnabled = rawEnabled.toInt();
+      } else if (rawEnabled is String) {
+        final s = rawEnabled.trim().toLowerCase();
+        if (s.isEmpty) {
+          professionalEnabled = null;
+        } else if (s == 'true' || s == 'yes') {
+          professionalEnabled = 1;
+        } else {
+          professionalEnabled = int.tryParse(s);
+        }
+      } else {
+        professionalEnabled = null;
+      }
+    }
+
+    final dynamic rawVerify = json['is_verify'] ??
+        json['isVerify'] ??
+        json['is_verified'] ??
+        json['user_verified'] ??
+        json['userVerified'] ??
+        json['verified'];
+    if (kDebugMode) {
+      final uname = '${json['username'] ?? ''}';
+      final safeUname = uname.length > 24 ? '${uname.substring(0, 24)}â€¦' : uname;
+      final rv = '${rawVerify ?? ''}';
+      final safeRv = rv.length > 24 ? '${rv.substring(0, 24)}â€¦' : rv;
+      debugPrint('[VERIFY_PARSE][AppUser] u=$safeUname raw=$safeRv');
+    }
+    if (rawVerify is bool) {
+      isVerify = rawVerify ? 1 : 0;
+    } else if (rawVerify is num) {
+      isVerify = rawVerify.toInt();
+    } else if (rawVerify is String) {
+      final s = rawVerify.trim().toLowerCase();
+      if (s == 'true' || s == 'yes') {
+        isVerify = 1;
+      } else {
+        isVerify = int.tryParse(s) ?? 0;
+      }
+    } else {
+      isVerify = 0;
+    }
+  }
+
+  Map<String, dynamic> toJson() {
+    final Map<String, dynamic> data = <String, dynamic>{};
+    data['user_id'] = userId;
+    data['identity'] = identity;
+    data['username'] = username;
+    data['fullname'] = fullname;
+    data['profile'] = profile;
+    data['is_verify'] = isVerify;
+    if (audioCallPrice != null) {
+      data['audio_call_price'] = audioCallPrice;
+    }
+    if (videoCallPrice != null) {
+      data['video_call_price'] = videoCallPrice;
+    }
+    if (callPrice != null) {
+      data['call_price'] = callPrice;
+    }
+    if (professionalType != null) {
+      data['professional_type'] = professionalType;
+    }
+    if (professionalEnabled != null) {
+      data['professional_enabled'] = professionalEnabled;
+    }
+    return data;
+  }
+}
+
+€§

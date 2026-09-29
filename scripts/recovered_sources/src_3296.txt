@@ -1,0 +1,172 @@
+i¡Ufile:///E:/flutterapp_pro/lib/screen/chat_screen/widget/chat_center_message_view.dartõeimport 'package:figma_squircle_updated/figma_squircle.dart';
+import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:shortzz/common/extensions/string_extension.dart';
+import 'package:shortzz/common/manager/session_manager.dart';
+import 'package:shortzz/common/widget/load_more_widget.dart';
+import 'package:shortzz/languages/languages_keys.dart';
+import 'package:shortzz/model/chat/message_data.dart';
+import 'package:shortzz/screen/chat_screen/chat_screen_controller.dart';
+import 'package:shortzz/screen/chat_screen/message_type_widget/chat_audio_message.dart';
+import 'package:shortzz/screen/chat_screen/message_type_widget/chat_g_i_f_message.dart';
+import 'package:shortzz/screen/chat_screen/message_type_widget/chat_gift_message.dart';
+import 'package:shortzz/screen/chat_screen/message_type_widget/chat_live_stream_message.dart';
+import 'package:shortzz/screen/chat_screen/message_type_widget/chat_media_message.dart';
+import 'package:shortzz/screen/chat_screen/message_type_widget/chat_post_message.dart';
+import 'package:shortzz/screen/chat_screen/message_type_widget/chat_story_reply_message.dart';
+import 'package:shortzz/screen/chat_screen/message_type_widget/chat_text_message.dart';
+import 'package:shortzz/utilities/text_style_custom.dart';
+import 'package:shortzz/utilities/theme_res.dart';
+
+class ChatMessageView extends StatelessWidget {
+  final ChatScreenController controller;
+
+  const ChatMessageView({super.key, required this.controller});
+
+  Future<void> _showMessageActions(
+      BuildContext context, MessageData message, bool isMe) async {
+    await showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                title: const Text('Reply'),
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  controller.replyMessage.value = message;
+                },
+              ),
+              ListTile(
+                title: Text(LKey.deleteForYou.tr),
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  controller.onDeleteForYou(message);
+                },
+              ),
+              if (isMe)
+                ListTile(
+                  title: Text(LKey.unSend.tr),
+                  onTap: () {
+                    Navigator.of(ctx).pop();
+                    controller.onUnSend(message);
+                  },
+                ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(child: Obx(
+      () {
+        return LoadMoreWidget(
+          loadMore: controller.fetchMoreChatList,
+          child: ListView.builder(
+            itemCount: controller.chatList.length,
+            reverse: true,
+            padding: EdgeInsets.zero,
+            itemBuilder: (context, index) {
+              MessageData message = controller.chatList[index];
+              bool isMe = message.userId == SessionManager.instance.getUserID();
+              return Container(
+                padding: const EdgeInsets.only(
+                    left: 10, right: 10, top: 7, bottom: 7),
+                decoration: ShapeDecoration(
+                    shape: SmoothRectangleBorder(
+                        borderRadius: SmoothBorderRadius(
+                            cornerRadius: 15, cornerSmoothing: 1))),
+                child: Column(
+                  crossAxisAlignment:
+                      isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                  children: [
+                    Align(
+                      alignment:
+                          isMe ? Alignment.centerRight : Alignment.centerLeft,
+                      child: GestureDetector(
+                        onLongPress: () =>
+                            _showMessageActions(context, message, isMe),
+                        child: Container(
+                          decoration: ShapeDecoration(
+                              color: scaffoldBackgroundColor(context),
+                              shape: SmoothRectangleBorder(
+                                borderRadius: SmoothBorderRadius(
+                                    cornerRadius: 15, cornerSmoothing: 1),
+                              )),
+                          child: switch (message.messageType) {
+                            MessageType.image => ChatMediaMessage(
+                                isMe: isMe,
+                                message: message,
+                                controller: controller),
+                            MessageType.video => ChatMediaMessage(
+                                isMe: isMe,
+                                message: message,
+                                controller: controller),
+                            MessageType.post => ChatPostMessage(
+                                message: message, controller: controller),
+                            MessageType.audio => ChatAudioMessage(
+                                message: message, controller: controller),
+                            MessageType.text =>
+                              ChatTextMessage(isMe: isMe, message: message),
+                            MessageType.gift =>
+                              ChatGiftMessage(message: message, isMe: isMe),
+                            MessageType.gif => ChatGIFMessage(message: message),
+                            MessageType.storyReply => ChatStoryReplyMessage(
+                                controller: controller,
+                                message: message,
+                                isMe: isMe),
+                            MessageType.liveStream => ChatLiveStreamMessage(
+                                message: message, isMe: isMe),
+                            null => const SizedBox(),
+                          },
+                        ),
+                      ),
+                    ),
+                    Align(
+                        alignment:
+                            isMe ? Alignment.centerRight : Alignment.centerLeft,
+                        child: ChatDateView(message: message))
+                  ],
+                ),
+              );
+            },
+          ),
+        );
+      },
+    ));
+  }
+}
+
+class ChatDateView extends StatelessWidget {
+  final MessageData message;
+
+  const ChatDateView({super.key, required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 5.0, right: 5, top: 3),
+      child: Text(
+        '${message.id ?? 0}'.chatTimeFormat,
+        style: TextStyleCustom.outFitLight300(
+            fontSize: 12, color: textLightGrey(context)),
+      ),
+    );
+  }
+}
+
+final List<BoxShadow> messageBubbleShadow = [
+  BoxShadow(
+    color: Colors.black.withValues(alpha: 0.10),
+    offset: const Offset(0, 4),
+    blurRadius: 10,
+  ),
+];
+Ä≠

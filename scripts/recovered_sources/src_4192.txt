@@ -1,0 +1,25 @@
+rfile:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/xml-6.6.1/lib/src/xml_events/events/end_element.dart‚himport '../../xml/enums/node_type.dart';
+import '../event.dart';
+import '../utils/named.dart';
+import '../visitor.dart';
+
+/// Event of an closing XML element node.
+class XmlEndElementEvent extends XmlEvent with XmlNamed {
+  XmlEndElementEvent(this.name);
+
+  @override
+  final String name;
+
+  @override
+  XmlNodeType get nodeType => XmlNodeType.ELEMENT;
+
+  @override
+  void accept(XmlEventVisitor visitor) => visitor.visitEndElementEvent(this);
+
+  @override
+  int get hashCode => Object.hash(nodeType, name);
+
+  @override
+  bool operator ==(Object other) =>
+      other is XmlEndElementEvent && other.name == name;
+}

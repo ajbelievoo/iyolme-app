@@ -1,0 +1,19 @@
+cfile:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/xml-6.6.1/lib/src/xml/nodes/data.dartÅŸimport '../mixins/has_parent.dart';
+import 'node.dart';
+
+/// Abstract XML data node.
+abstract class XmlData extends XmlNode with XmlHasParent<XmlNode> {
+  /// Create a data section with `value`.
+  XmlData(this.value);
+
+  // The textual value of this node.
+  @override
+  String value;
+
+  @Deprecated('Use `XmlData.value` getter instead')
+  @override
+  String get text => value;
+
+  @Deprecated('Use `XmlData.value` setter instead')
+  set text(String text) => value = text;
+}

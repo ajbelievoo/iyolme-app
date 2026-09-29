@@ -1,0 +1,19 @@
+…Ãufile:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_local_notifications-19.5.0/lib/src/helpers.dart‚(import 'package:clock/clock.dart';
+import 'package:timezone/timezone.dart';
+
+import 'types.dart';
+
+/// Helper method for validating a date/time value represents a future point in
+/// time where `matchDateTimeComponents` is null.
+void validateDateIsInTheFuture(
+  TZDateTime scheduledDate,
+  DateTimeComponents? matchDateTimeComponents,
+) {
+  if (matchDateTimeComponents != null) {
+    return;
+  }
+  if (scheduledDate.isBefore(clock.now())) {
+    throw ArgumentError.value(
+        scheduledDate, 'scheduledDate', 'Must be a date in the future');
+  }
+}

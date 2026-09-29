@@ -1,0 +1,116 @@
+import 'package:flutter/material.dart';
+import 'package:shortzz/utilities/theme_res.dart';
+
+class AdsMetric {
+  final String label;
+  final String value;
+  final IconData icon;
+  final Color color;
+  final String? subtitle;
+
+  const AdsMetric({
+    required this.label,
+    required this.value,
+    required this.icon,
+    required this.color,
+    this.subtitle,
+  });
+}
+
+class AdsMetricCardsGrid extends StatelessWidget {
+  final List<AdsMetric> items;
+  final int crossAxisCount;
+
+  const AdsMetricCardsGrid({
+    super.key,
+    required this.items,
+    this.crossAxisCount = 2,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GridView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: items.length,
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: crossAxisCount,
+        mainAxisSpacing: 10,
+        crossAxisSpacing: 10,
+        childAspectRatio: 2.10,
+      ),
+      itemBuilder: (context, i) {
+        final m = items[i];
+        return Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: Theme.of(context).cardColor,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: textLightGrey(context).withValues(alpha: 0.16),
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: m.color.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: m.color.withValues(alpha: 0.18)),
+                ),
+                child: Icon(m.icon, color: m.color, size: 18),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      m.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: textLightGrey(context),
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      m.value,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                        color: textDarkGrey(context),
+                      ),
+                    ),
+                    if ((m.subtitle ?? '').trim().isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        m.subtitle!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w500,
+                          color: textLightGrey(context).withValues(alpha: 0.95),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+u

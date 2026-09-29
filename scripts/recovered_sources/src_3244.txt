@@ -1,0 +1,2167 @@
+import 'dart:async';
+import 'dart:convert';
+import 'package:flutter/material.dart';
+import 'package:shortzz/common/controller/base_controller.dart';
+import 'package:shortzz/common/functions/media_picker_helper.dart';
+import 'package:shortzz/common/manager/session_manager.dart';
+import 'package:shortzz/common/service/api/post_service.dart';
+import 'package:shortzz/common/service/api/common_service.dart';
+import 'package:shortzz/common/service/api/user_service.dart';
+import 'package:shortzz/common/service/api/user_ads_service.dart';
+import 'package:shortzz/common/service/api/boost_service.dart';
+import 'package:shortzz/model/ads/ad_estimate.dart';
+import 'package:shortzz/model/boost/boost_estimate.dart';
+import 'package:shortzz/model/general/countries_model.dart';
+import 'package:shortzz/model/post_story/post_model.dart';
+import 'package:shortzz/screen/ads_manager/data/ads_dto.dart';
+import 'package:shortzz/screen/ads_manager/data/ads_repository.dart';
+import 'package:shortzz/screen/ads_manager/screen/boost_post/boost_post_bottom_sheet.dart';
+import 'package:shortzz/screen/ads_manager/widget/ads_section_header.dart';
+import 'package:shortzz/utilities/asset_res.dart';
+import 'package:shortzz/utilities/theme_res.dart';
+
+import 'package:shortzz/screen/ads_manager/ads_manager_screen.dart';
+
+enum CampaignGoal {
+  getVisits,
+  getFollowers,
+  promotePost,
+  appInstall,
+  websiteClick,
+}
+
+enum CampaignPlacement {
+  feed,
+  story,
+  reel,
+  profile,
+  explore,
+}
+
+class CreateCampaignScreen extends StatefulWidget {
+  const CreateCampaignScreen({
+    super.key,
+    this.isBoostMode = false,
+    this.postId,
+    this.postTitle,
+    this.postCaption,
+    this.mediaUrl,
+    this.postType,
+    this.prefillAudienceCountry,
+    this.prefillDailyBudget,
+    this.prefillTotalBudget,
+    this.openQuickBudgetOnStart = false,
+    this.redirectToAnalyticsOnSubmit = true,
+  });
+
+  final bool isBoostMode;
+  final int? postId;
+  final String? postTitle;
+  final String? postCaption;
+  final String? mediaUrl;
+  final PostType? postType;
+
+  final String? prefillAudienceCountry;
+  final num? prefillDailyBudget;
+  final num? prefillTotalBudget;
+  final bool openQuickBudgetOnStart;
+  final bool redirectToAnalyticsOnSubmit;
+
+  @override
+  State<CreateCampaignScreen> createState() => _CreateCampaignScreenState();
+}
+
+class _CreateCampaignScreenState extends State<CreateCampaignScreen> {
+  int _step = 0;
+
+  final AdsManagerRepository _repo = AdsManagerRepository();
+
+  final TextEditingController _titleController = TextEditingController();
+
+  num? _walletBalance;
+  num? _coinBalance; // For boost mode
+
+  List<Country> _countries = const <Country>[];
+
+  CampaignGoal? _goal;
+  CampaignPlacement _placement = CampaignPlacement.feed;
+  String? _audienceCountry;
+  num? _dailyBudget;
+  num? _totalBudget;
+  final int _durationDays = 5; // Default duration
+
+  String? _mediaUrl;
+
+  int? _selectedPostId;
+  String? _selectedPostCaption;
+  PostType? _selectedPostType;
+  String? _selectedPostPreviewUrl;
+
+  bool _didOpenQuickBudget = false;
+  bool _isMediaUploading = false;
+  
+  // Estimate logic
+  Timer? _debounceTimer;
+  bool _isFetchingEstimate = false;
+  AdEstimateData? _adEstimate;
+  BoostEstimateData? _boostEstimate;
+
+  String _goalParam(CampaignGoal g) {
+    switch (g) {
+      case CampaignGoal.getVisits:
+        return 'website_visits';
+      case CampaignGoal.getFollowers:
+        return 'followers';
+      case CampaignGoal.promotePost:
+        return 'engagement';
+      case CampaignGoal.appInstall:
+        return 'app_install';
+      case CampaignGoal.websiteClick:
+        return 'website_click';
+    }
+  }
+
+  Future<void> _loadCountries() async {
+    try {
+      final items = await parseCountries(filePath: AssetRes.countriesCSV);
+      if (!mounted) return;
+      setState(() {
+        _countries = items;
+      });
+    } catch (_) {
+      // ignore
+    }
+  }
+
+  Future<void> _openAudiencePicker() async {
+    final String? picked = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: scaffoldBackgroundColor(context),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        var query = '';
+
+        List<Country> filter(List<Country> list, String q) {
+          final s = q.trim().toLowerCase();
+          if (s.isEmpty) return list;
+          return list
+              .where((c) =>
+                  c.countryCode.toLowerCase().contains(s) ||
+                  c.countryName.toLowerCase().contains(s))
+              .toList();
+        }
+
+        return StatefulBuilder(
+          builder: (context, setLocal) {
+            final filtered = filter(_countries, query);
+            return SafeArea(
+              child: Padding(
+                padding: EdgeInsets.only(
+                  left: 16,
+                  right: 16,
+                  top: 12,
+                  bottom: MediaQuery.of(ctx).viewInsets.bottom + 12,
+                ),
+                child: SizedBox(
+                  height: MediaQuery.of(ctx).size.height * 0.75,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'Select audience country',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w900,
+                                fontSize: 16,
+                                color: textDarkGrey(ctx),
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            onPressed: () => Navigator.of(ctx).pop(),
+                            icon: const Icon(Icons.close),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      TextFormField(
+                        decoration: const InputDecoration(
+                          hintText: 'Search by code or country name',
+                          border: OutlineInputBorder(),
+                        ),
+                        onChanged: (v) {
+                          setLocal(() {
+                            query = v;
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 10),
+                      Expanded(
+                        child: ListView.separated(
+                          itemCount: 1 + filtered.length,
+                          separatorBuilder: (_, __) => Divider(
+                            height: 1,
+                            color:
+                                textLightGrey(ctx).withValues(alpha: 0.16),
+                          ),
+                          itemBuilder: (context, index) {
+                            if (index == 0) {
+                              return ListTile(
+                                onTap: () => Navigator.of(ctx).pop('all'),
+                                leading: Icon(
+                                  Icons.public,
+                                  color: themeAccentSolid(ctx),
+                                ),
+                                title: const Text(
+                                  'All countries',
+                                  style: TextStyle(fontWeight: FontWeight.w900),
+                                ),
+                                subtitle: Text(
+                                  'Send to worldwide audience',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: textLightGrey(ctx),
+                                  ),
+                                ),
+                                trailing: Icon(
+                                  Icons.chevron_right,
+                                  color:
+                                      textLightGrey(ctx).withValues(alpha: 0.65),
+                                ),
+                              );
+                            }
+
+                            final c = filtered[index - 1];
+                            return ListTile(
+                              onTap: () =>
+                                  Navigator.of(ctx).pop(c.countryCode),
+                              leading: Container(
+                                width: 40,
+                                height: 40,
+                                decoration: BoxDecoration(
+                                  color: Theme.of(ctx).cardColor,
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(
+                                    color:
+                                        Colors.black.withValues(alpha: 0.06),
+                                  ),
+                                ),
+                                child: Center(
+                                  child: Text(
+                                    c.countryCode.toUpperCase(),
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w900,
+                                      color: textDarkGrey(ctx),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              title: Text(
+                                c.countryName,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                              subtitle: Text(
+                                c.countryCode,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: textLightGrey(ctx),
+                                ),
+                              ),
+                              trailing: Icon(
+                                Icons.chevron_right,
+                                color:
+                                    textLightGrey(ctx).withValues(alpha: 0.65),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+
+    if (picked == null) return;
+    setState(() {
+      _audienceCountry = picked;
+    });
+  }
+
+  Future<void> _fetchWalletBalance() async {
+    try {
+      // Refresh user details to get latest coin balance
+      if (widget.isBoostMode) {
+         await UserService.instance.fetchUserDetails();
+      }
+
+      if (widget.isBoostMode) {
+        // Boost uses coins from User profile
+        final user = SessionManager.instance.getUser();
+        if (mounted) {
+          setState(() {
+             _coinBalance = user?.coinWallet;
+          });
+        }
+      } else {
+        final w = await _repo.fetchWalletRaw();
+        if (!mounted) return;
+        setState(() {
+          _walletBalance = w.balance;
+        });
+      }
+    } catch (_) {
+      // ignore
+    }
+  }
+  
+  void _onBudgetChanged() {
+    if (_debounceTimer?.isActive ?? false) _debounceTimer!.cancel();
+    _debounceTimer = Timer(const Duration(milliseconds: 800), _fetchEstimate);
+  }
+
+  Future<void> _fetchEstimate() async {
+    final daily = _dailyBudget ?? 0;
+    final total = _totalBudget ?? 0;
+    
+    // Simple duration calc if total > daily
+    int days = _durationDays;
+    if (daily > 0 && total > 0) {
+      days = (total / daily).ceil();
+      if (days < 1) days = 1;
+    }
+
+    if (daily <= 0 || total <= 0) {
+      setState(() {
+        _adEstimate = null;
+        _boostEstimate = null;
+      });
+      return;
+    }
+
+    setState(() {
+      _isFetchingEstimate = true;
+    });
+
+    try {
+      if (widget.isBoostMode) {
+        final placementParam = _placementParam(_placement);
+        final effectivePlacement =
+            placementParam == 'profile' ? 'feed' : placementParam;
+        final res = await BoostService.instance.getEstimate(
+          budgetCoins: total.toInt(),
+          durationHours: days * 24,
+          placement: effectivePlacement,
+        );
+        if (mounted) {
+          setState(() {
+            // Fallback estimates if backend returns 0/0
+            final data = res.data;
+            final rMin = data?.estimatedReachMin ?? 0;
+            final rMax = data?.estimatedReachMax ?? 0;
+            final iMin = data?.estimatedImpressionsMin ?? 0;
+            final iMax = data?.estimatedImpressionsMax ?? 0;
+            if ((rMin <= 0 && rMax <= 0) && (iMin <= 0 && iMax <= 0)) {
+              int base = (total * 100).toInt();
+              switch (effectivePlacement) {
+                case 'reel':
+                  base = (base * 1.8).toInt();
+                  break;
+                case 'story':
+                  base = (base * 1.4).toInt();
+                  break;
+                case 'feed':
+                  base = (base * 1.2).toInt();
+                  break;
+                default:
+                  break;
+              }
+              final impMin = base;
+              final impMax = (base * 1.6).toInt();
+              final reachMin = (impMin * 0.6).toInt();
+              final reachMax = (impMax * 0.7).toInt();
+              _boostEstimate = BoostEstimateData(
+                estimatedImpressionsMin: impMin,
+                estimatedImpressionsMax: impMax,
+                estimatedReachMin: reachMin,
+                estimatedReachMax: reachMax,
+                estimatedClicksMin: null,
+                estimatedClicksMax: null,
+              );
+            } else {
+              _boostEstimate = data;
+            }
+            _adEstimate = null;
+          });
+        }
+      } else {
+        // Ads uses money
+        final res = await UserAdsService.instance.getEstimate(
+          budget: total.toDouble(),
+          durationHours: days * 24,
+          placement: _placementParam(_placement),
+          billing: 'cpc', // Defaulting to CPC for wizard
+        );
+        if (mounted) {
+          setState(() {
+            _adEstimate = res.data;
+            _boostEstimate = null;
+          });
+        }
+      }
+    } catch (e) {
+      if (widget.isBoostMode) {
+        final placementParam = _placementParam(_placement);
+        final effectivePlacement =
+            placementParam == 'profile' ? 'feed' : placementParam;
+        final total = _totalBudget ?? 0;
+        int base = (total * 100).toInt();
+        switch (effectivePlacement) {
+          case 'reel':
+            base = (base * 1.8).toInt();
+            break;
+          case 'story':
+            base = (base * 1.4).toInt();
+            break;
+          case 'feed':
+            base = (base * 1.2).toInt();
+            break;
+          default:
+            break;
+        }
+        final impMin = base;
+        final impMax = (base * 1.6).toInt();
+        final reachMin = (impMin * 0.6).toInt();
+        final reachMax = (impMax * 0.7).toInt();
+        if (mounted) {
+          setState(() {
+            _boostEstimate = BoostEstimateData(
+              estimatedImpressionsMin: impMin,
+              estimatedImpressionsMax: impMax,
+              estimatedReachMin: reachMin,
+              estimatedReachMax: reachMax,
+              estimatedClicksMin: null,
+              estimatedClicksMax: null,
+            );
+            _adEstimate = null;
+          });
+        }
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isFetchingEstimate = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _openPostPicker() async {
+    final myId = SessionManager.instance.getUserID();
+    if (myId <= 0) {
+      BaseController.share.showSnackBar('Please login again');
+      return;
+    }
+
+    Future<List<Post>> fetchAll() async {
+      final postsData = await PostService.instance.fetchUserPosts(
+        type: PostType.posts,
+        userId: myId,
+        lastItemId: null,
+      );
+      final reelsData = await PostService.instance.fetchUserPosts(
+        type: PostType.reels,
+        userId: myId,
+        lastItemId: null,
+      );
+
+      final list = <Post>[];
+      list.addAll(postsData?.pinnedPostList ?? const <Post>[]);
+      list.addAll(postsData?.posts ?? const <Post>[]);
+      list.addAll(reelsData?.pinnedPostList ?? const <Post>[]);
+      list.addAll(reelsData?.posts ?? const <Post>[]);
+
+      final seen = <int>{};
+      final uniq = <Post>[];
+      for (final p in list) {
+        final id = p.id ?? 0;
+        if (id <= 0) continue;
+        if (seen.contains(id)) continue;
+        seen.add(id);
+        uniq.add(p);
+      }
+      return uniq;
+    }
+
+    final Post? picked = await showModalBottomSheet<Post>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: scaffoldBackgroundColor(context),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: EdgeInsets.only(
+              left: 16,
+              right: 16,
+              top: 12,
+              bottom: MediaQuery.of(ctx).viewInsets.bottom + 12,
+            ),
+            child: SizedBox(
+              height: MediaQuery.of(ctx).size.height * 0.72,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Select a post',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w900,
+                            fontSize: 16,
+                            color: textDarkGrey(ctx),
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => Navigator.of(ctx).pop(),
+                        icon: const Icon(Icons.close),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: FutureBuilder<List<Post>>(
+                      future: fetchAll(),
+                      builder: (context, snap) {
+                        if (snap.connectionState == ConnectionState.waiting) {
+                          return const Center(
+                            child: CircularProgressIndicator(),
+                          );
+                        }
+                        if (snap.hasError) {
+                          return Center(
+                            child: Text(
+                              'Failed to load posts',
+                              style: TextStyle(color: textLightGrey(ctx)),
+                            ),
+                          );
+                        }
+                        final items = snap.data ?? const <Post>[];
+                        if (items.isEmpty) {
+                          return Center(
+                            child: Text(
+                              'No posts found',
+                              style: TextStyle(color: textLightGrey(ctx)),
+                            ),
+                          );
+                        }
+                        String query = '';
+                        List<Post> filtered = items;
+                        return StatefulBuilder(
+                          builder: (ctx2, setModalState) {
+                            void apply(String q) {
+                              final qq = q.trim().toLowerCase();
+                              query = qq;
+                              filtered = items.where((p) {
+                                final id = (p.id ?? 0).toString();
+                                final cap = (p.description ?? '').toLowerCase();
+                                return id.contains(qq) || cap.contains(qq);
+                              }).toList();
+                              setModalState(() {});
+                            }
+                            return Column(
+                              children: [
+                                TextFormField(
+                                  decoration: const InputDecoration(
+                                    labelText: 'Search your posts',
+                                    border: OutlineInputBorder(),
+                                  ),
+                                  onChanged: apply,
+                                ),
+                                const SizedBox(height: 10),
+                                Expanded(
+                                  child: ListView.separated(
+                                    itemCount: filtered.length,
+                                    separatorBuilder: (_, __) => Divider(
+                                      height: 1,
+                                      color: textLightGrey(ctx2).withValues(alpha: 0.16),
+                                    ),
+                                    itemBuilder: (context, index) {
+                                      final p = filtered[index];
+                                      final id = p.id ?? 0;
+                                      final caption = (p.description ?? '').trim();
+                                      final thumb = (p.thumbnail ?? '').toString().trim();
+                                      final isReel = p.postType == PostType.reel;
+                                      return ListTile(
+                                        onTap: () {
+                                          if (id <= 0) return;
+                                          Navigator.of(ctx).pop(p);
+                                        },
+                                        leading: Container(
+                                          width: 42,
+                                          height: 42,
+                                          decoration: BoxDecoration(
+                                            color: Theme.of(ctx2).cardColor,
+                                            borderRadius: BorderRadius.circular(10),
+                                            border: Border.all(
+                                              color: Colors.black.withValues(alpha: 0.06),
+                                            ),
+                                          ),
+                                          child: Icon(
+                                            isReel
+                                                ? Icons.video_library_outlined
+                                                : Icons.image_outlined,
+                                            color: themeAccentSolid(ctx2),
+                                          ),
+                                        ),
+                                        title: Text(
+                                          'Post #$id',
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w900,
+                                          ),
+                                        ),
+                                        subtitle: Text(
+                                          caption.isNotEmpty
+                                              ? caption
+                                              : (thumb.isNotEmpty ? 'Thumbnail available' : ''),
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: textLightGrey(ctx2),
+                                          ),
+                                        ),
+                                        trailing: Icon(
+                                          Icons.chevron_right,
+                                          color: textLightGrey(ctx2).withValues(alpha: 0.65),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                ),
+                              ],
+                            );
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+
+    if (picked == null) return;
+    final id = picked.id ?? 0;
+    if (id <= 0) return;
+
+    setState(() {
+      _selectedPostId = id;
+      _selectedPostCaption = picked.description;
+      _selectedPostType = picked.postType;
+      _selectedPostPreviewUrl = (picked.thumbnail ?? picked.video)?.toString();
+      _mediaUrl = null;
+      if (picked.postType == PostType.video || picked.postType == PostType.reel) {
+        _placement = CampaignPlacement.reel;
+      } else {
+        _placement = CampaignPlacement.feed;
+      }
+    });
+  }
+
+  void _clearSelectedPost() {
+    setState(() {
+      _selectedPostId = null;
+      _selectedPostCaption = null;
+      _selectedPostType = null;
+      _selectedPostPreviewUrl = null;
+    });
+  }
+
+  Future<void> _pickAndUploadMedia() async {
+    final media = await MediaPickerHelper.shared.pickMedia();
+    if (media == null) return;
+
+    setState(() {
+      _isMediaUploading = true;
+    });
+
+    try {
+      // BaseController.share.showLoader(); // Loader handled by button state now
+      final res = await CommonService.instance.uploadFileGivePath(media.file);
+      // BaseController.share.stopLoader();
+
+      if (res.status != true || (res.data ?? '').toString().trim().isEmpty) {
+        BaseController.share.showSnackBar(res.message ?? 'Upload failed');
+        return;
+      }
+
+      final url = res.data!.toString().trim();
+      if (!mounted) return;
+      setState(() {
+        _mediaUrl = url;
+        _clearSelectedPost();
+      });
+      BaseController.share.showSnackBar('Media uploaded');
+    } catch (e) {
+      // BaseController.share.stopLoader();
+      BaseController.share.showSnackBar(e.toString());
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isMediaUploading = false;
+        });
+      }
+    }
+  }
+
+  String _placementParam(CampaignPlacement p) {
+    switch (p) {
+      case CampaignPlacement.feed:
+        return 'feed';
+      case CampaignPlacement.story:
+        return 'story';
+      case CampaignPlacement.reel:
+        return 'reel';
+      case CampaignPlacement.profile:
+        return 'profile';
+      case CampaignPlacement.explore:
+        return 'explore';
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+
+    _fetchWalletBalance();
+    _loadCountries();
+
+    _titleController.text = widget.postTitle?.trim().isNotEmpty == true
+        ? widget.postTitle!.trim()
+        : 'My campaign';
+
+    if (widget.isBoostMode) {
+      _goal = CampaignGoal.promotePost;
+      _audienceCountry = widget.prefillAudienceCountry ?? 'all';
+      _dailyBudget = widget.prefillDailyBudget ?? 5;
+      _totalBudget = widget.prefillTotalBudget ?? 25;
+      _mediaUrl = widget.mediaUrl;
+
+      _selectedPostId = widget.postId;
+      _selectedPostCaption = widget.postCaption;
+      _selectedPostType = widget.postType;
+      _selectedPostPreviewUrl = widget.mediaUrl;
+
+      final postType = widget.postType;
+      if (postType == PostType.video) {
+        _placement = CampaignPlacement.reel;
+      } else {
+        _placement = CampaignPlacement.feed;
+      }
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (widget.isBoostMode && widget.openQuickBudgetOnStart) {
+        _openQuickBudgetIfNeeded();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _debounceTimer?.cancel();
+    super.dispose();
+  }
+
+  void _openQuickBudgetIfNeeded() {
+    if (_didOpenQuickBudget) return;
+    _didOpenQuickBudget = true;
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: scaffoldBackgroundColor(context),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) {
+        return BoostPostBottomSheet(
+          postId: widget.postId,
+          initialDailyBudget: (_dailyBudget ?? 0) > 0 ? _dailyBudget! : 5,
+          initialTotalBudget: (_totalBudget ?? 0) > 0 ? _totalBudget! : 25,
+          onBoostNow: (daily, total) {
+            setState(() {
+              _dailyBudget = daily;
+              _totalBudget = total;
+            });
+            _submitBoostApi(dailyBudget: daily, totalBudget: total);
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _submitBoostApi({
+    required num dailyBudget,
+    required num totalBudget,
+    bool forceDraft = false,
+  }) async {
+    final title = (widget.postTitle?.trim().isNotEmpty == true)
+        ? widget.postTitle!.trim()
+        : _titleController.text.trim().isNotEmpty
+            ? _titleController.text.trim()
+            : 'Boosted post';
+
+    try {
+      final wb = _coinBalance;
+      final bool isDraft = forceDraft || (wb != null && totalBudget > wb);
+
+      final media = (widget.mediaUrl ?? _mediaUrl)?.trim();
+      final effectivePostId = _selectedPostId ?? widget.postId ?? 0;
+      if ((effectivePostId == 0) && (media == null || media.isEmpty)) {
+        BaseController.share.showSnackBar('Please provide media');
+        return;
+      }
+
+      final int total = totalBudget.toInt();
+      int days = _durationDays;
+      if (dailyBudget > 0 && totalBudget > 0) {
+        days = (totalBudget / dailyBudget).ceil();
+        if (days < 1) days = 1;
+      }
+
+      final meta = <String, dynamic>{
+        'source': 'boost',
+        'isDraft': isDraft,
+      };
+
+      final res = await BoostService.instance.createBoostRequest(
+        postId: (_selectedPostId ?? widget.postId ?? 0),
+        budgetCoins: total,
+        durationHours: days * 24,
+        placement: _placementParam(_placement),
+        title: title,
+        targetCountry: _audienceCountry,
+        metadataJson: jsonEncode(meta),
+        status: isDraft ? 'draft' : null,
+      );
+      if (res.status != true) {
+        throw Exception(res.message ?? 'Failed to submit boost');
+      }
+
+      BaseController.share.showSnackBar(isDraft ? 'Campaign saved as draft' : 'Campaign submitted');
+
+      if (!mounted) return;
+
+      if (!widget.redirectToAnalyticsOnSubmit) {
+        Navigator.of(context).maybePop();
+        return;
+      }
+
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => const AdsManagerScreen(initialTabIndex: 1),
+        ),
+      );
+    } catch (e) {
+      BaseController.share.showSnackBar(e.toString());
+    }
+  }
+
+  Future<void> _submitWizardApi() async {
+    await _submitWizardApiInternal(forceDraft: false);
+  }
+
+  Future<void> _submitWizardApiInternal({required bool forceDraft}) async {
+    final title = _titleController.text.trim();
+    if (title.isEmpty) {
+      BaseController.share.showSnackBar('Please enter campaign name');
+      return;
+    }
+    if (_goal == null) {
+      BaseController.share.showSnackBar('Please select goal');
+      return;
+    }
+    if ((_audienceCountry ?? '').trim().isEmpty) {
+      BaseController.share.showSnackBar('Please enter country');
+      return;
+    }
+    if ((_dailyBudget ?? 0) <= 0 || (_totalBudget ?? 0) <= 0) {
+      BaseController.share.showSnackBar('Please enter valid budgets');
+      return;
+    }
+
+    final hasPost = (_selectedPostId ?? 0) > 0;
+    final media = (_mediaUrl ?? '').trim();
+    if (!hasPost && media.isEmpty) {
+      BaseController.share.showSnackBar('Please provide media');
+      return;
+    }
+
+    try {
+      final wb = _walletBalance;
+      final total = _totalBudget ?? 0;
+      final bool isDraft = forceDraft || (wb != null && total > wb);
+      
+      final campaignId = await _repo.createCampaign(
+        request: AdsManagerCampaignCreateRequestDto(
+          title: title,
+          goal: _goalParam(_goal!),
+          placement: _placementParam(_placement),
+          audienceCountry: _audienceCountry,
+          dailyBudget: _dailyBudget,
+          totalBudget: _totalBudget,
+          mediaUrl: media.isEmpty ? null : media,
+          postId: hasPost ? _selectedPostId : null,
+          status: isDraft ? 'draft' : null,
+          metadata: <String, dynamic>{
+            'source': 'wizard',
+            'isDraft': isDraft,
+          },
+        ),
+      );
+
+      BaseController.share.showSnackBar(isDraft ? 'Campaign saved as draft' : 'Campaign submitted');
+
+      if (!mounted) return;
+
+      if (!widget.redirectToAnalyticsOnSubmit) {
+        Navigator.of(context).maybePop();
+        return;
+      }
+
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => const AdsManagerScreen(initialTabIndex: 1),
+        ),
+      );
+    } catch (e) {
+      final msg = e.toString().toLowerCase();
+      if (msg.contains('403')) {
+        final media = (_mediaUrl ?? '').trim();
+        if (media.isEmpty) {
+          BaseController.share.showSnackBar('Forbidden: please upload media to create user ad');
+          return;
+        }
+        final d = _durationDays > 0 ? _durationDays : 1;
+        try {
+          final status = await UserAdsService.instance.createUserAdRequest(
+            title: title,
+            description: null,
+            mediaPath: media,
+            mediaType: 'image',
+            placement: _placementParam(_placement),
+            billing: 'cpc',
+            budget: (_totalBudget ?? 0).toDouble(),
+            durationHours: d * 24,
+            ctaUrl: null,
+            keywords: null,
+            metadataJson: null,
+          );
+          if (status.status == true) {
+            BaseController.share.showSnackBar('Ad request submitted');
+            if (!mounted) return;
+            Navigator.of(context).pushReplacement(
+              MaterialPageRoute(
+                builder: (_) => const AdsManagerScreen(initialTabIndex: 1),
+              ),
+            );
+            return;
+          }
+        } catch (_) {}
+      }
+      BaseController.share.showSnackBar(e.toString());
+    }
+  }
+
+  bool get _canContinue {
+    if (_step == 0) return _titleController.text.trim().isNotEmpty;
+    if (_step == 1) return _goal != null;
+    if (_step == 2) return !_isMediaUploading; // Block if uploading
+    if (_step == 3) return true;
+    if (_step == 4) return (_audienceCountry ?? '').trim().isNotEmpty;
+    if (_step == 5) return (_dailyBudget ?? 0) > 0 && (_totalBudget ?? 0) > 0;
+    // Step 6 is Preview, always valid
+    return true;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: scaffoldBackgroundColor(context),
+      appBar: AppBar(
+        backgroundColor: scaffoldBackgroundColor(context),
+        foregroundColor: textDarkGrey(context),
+        elevation: 0.6,
+        title: const Text(
+          'Create Campaign',
+          style: TextStyle(fontWeight: FontWeight.w900),
+        ),
+        actions: [
+          if (widget.isBoostMode)
+            TextButton.icon(
+              onPressed: _openQuickBudgetIfNeeded,
+              icon: const Icon(Icons.bolt_outlined),
+              label: const Text(
+                'Quick boost',
+                style: TextStyle(fontWeight: FontWeight.w900),
+              ),
+            ),
+        ],
+      ),
+      body: Stepper(
+        currentStep: _step,
+        onStepContinue: _canContinue
+            ? () {
+                if (_step < 7) {
+                  if (_step == 5) {
+                    setState(() {
+                      _step++;
+                    });
+                    _onBudgetChanged();
+                  } else {
+                    setState(() {
+                      _step++;
+                    });
+                  }
+                }
+              }
+            : null,
+        onStepCancel: () {
+          if (_step <= 0) {
+            Navigator.of(context).maybePop();
+            return;
+          }
+          setState(() {
+            _step--;
+          });
+        },
+        controlsBuilder: (ctx, d) {
+          // Hide Stepper's default "Submit" on final step; show only Back
+          if (_step == 7) {
+            return Align(
+              alignment: Alignment.centerRight,
+              child: SizedBox(
+                height: 48,
+                child: OutlinedButton(
+                  onPressed: d.onStepCancel,
+                  style: OutlinedButton.styleFrom(
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    side: BorderSide(
+                      color: textLightGrey(context).withValues(alpha: 0.35),
+                    ),
+                    foregroundColor: textDarkGrey(context),
+                  ),
+                  child: const Text(
+                    'Back',
+                    style: TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                ),
+              ),
+            );
+          }
+          return Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: SizedBox(
+                    height: 48,
+                    child: ElevatedButton(
+                      onPressed: d.onStepContinue,
+                      style: ElevatedButton.styleFrom(
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                      ),
+                      child: Text(
+                        _isMediaUploading && _step == 2 ? 'Uploading...' : 'Continue',
+                        style: const TextStyle(fontWeight: FontWeight.w900),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                SizedBox(
+                  height: 48,
+                  child: OutlinedButton(
+                    onPressed: d.onStepCancel,
+                    style: OutlinedButton.styleFrom(
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      side: BorderSide(
+                        color: textLightGrey(context).withValues(alpha: 0.35),
+                      ),
+                      foregroundColor: textDarkGrey(context),
+                    ),
+                    child: const Text(
+                      'Back',
+                      style: TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+        steps: [
+          Step(
+            title: const Text('Name'),
+            isActive: _step >= 0,
+            content: _NameStep(
+              controller: _titleController,
+              readOnly: widget.isBoostMode,
+            ),
+          ),
+          Step(
+            title: const Text('Goal'),
+            isActive: _step >= 1,
+            content: _GoalStep(
+              selected: _goal,
+              onChanged: (g) {
+                setState(() {
+                  _goal = g;
+                });
+              },
+            ),
+          ),
+          Step(
+            title: const Text('Media'),
+            isActive: true,
+            content: _MediaStep(
+              isBoostMode: widget.isBoostMode,
+              postTitle: widget.postTitle,
+              postCaption: widget.postCaption,
+              mediaUrl: widget.mediaUrl,
+              postType: widget.postType,
+              postId: widget.postId,
+              pickedMediaUrl: _mediaUrl,
+              onPickedMediaUrl: (v) {
+                setState(() {
+                  _mediaUrl = v;
+                });
+              },
+              selectedPostId: _selectedPostId,
+              selectedPostCaption: _selectedPostCaption,
+              selectedPostType: _selectedPostType,
+              selectedPostPreviewUrl: _selectedPostPreviewUrl,
+              onPickPost: _openPostPicker,
+              onClearPost: _clearSelectedPost,
+              onUploadMedia: _pickAndUploadMedia,
+            ),
+          ),
+          Step(
+            title: const Text('Placement'),
+            isActive: _step >= 3,
+            content: _PlacementStep(
+              selected: _placement,
+              onChanged: (p) {
+                setState(() {
+                  _placement = p;
+                });
+              },
+            ),
+          ),
+          Step(
+            title: const Text('Audience'),
+            isActive: _step >= 4,
+            content: _AudienceStep(
+              country: _audienceCountry,
+              onPick: _openAudiencePicker,
+              countriesLoaded: _countries.isNotEmpty,
+            ),
+          ),
+          Step(
+            title: const Text('Budget'),
+            isActive: _step >= 5,
+            content: _BudgetStep(
+              daily: _dailyBudget,
+              total: _totalBudget,
+              isBoostMode: widget.isBoostMode,
+              onChangedDaily: (v) {
+                setState(() {
+                  _dailyBudget = v;
+                });
+                _onBudgetChanged();
+              },
+              onChangedTotal: (v) {
+                setState(() {
+                  _totalBudget = v;
+                });
+                _onBudgetChanged();
+              },
+            ),
+          ),
+          Step(
+            title: const Text('Preview'),
+            isActive: _step >= 6,
+            content: _PreviewStep(
+              goal: _goal,
+              placement: _placement,
+              country: _audienceCountry,
+              dailyBudget: _dailyBudget,
+              totalBudget: _totalBudget,
+              mediaUrl: _mediaUrl,
+              selectedPostId: _selectedPostId,
+              loadingEstimate: _isFetchingEstimate,
+              estAd: _adEstimate,
+              estBoost: _boostEstimate,
+            ),
+          ),
+          Step(
+            title: const Text('Pay & Submit'),
+            isActive: _step >= 7,
+            content: _PaySubmitStep(
+              walletBalance: widget.isBoostMode ? _coinBalance : _walletBalance,
+              totalBudget: _totalBudget,
+              onSaveDraft: () {
+                if (widget.isBoostMode) {
+                  _submitBoostApi(
+                    dailyBudget: (_dailyBudget ?? 0) > 0 ? _dailyBudget! : 0,
+                    totalBudget: (_totalBudget ?? 0) > 0 ? _totalBudget! : 0,
+                    forceDraft: true,
+                  );
+                } else {
+                  _submitWizardApiInternal(forceDraft: true);
+                }
+              },
+              onSubmit: () {
+                if (widget.isBoostMode) {
+                  _submitBoostApi(
+                    dailyBudget: (_dailyBudget ?? 0) > 0 ? _dailyBudget! : 0,
+                    totalBudget: (_totalBudget ?? 0) > 0 ? _totalBudget! : 0,
+                  );
+                } else {
+                  _submitWizardApiInternal(forceDraft: false);
+                }
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _NameStep extends StatelessWidget {
+  const _NameStep({
+    required this.controller,
+    required this.readOnly,
+  });
+
+  final TextEditingController controller;
+  final bool readOnly;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextFormField(
+      controller: controller,
+      readOnly: readOnly,
+      decoration: InputDecoration(
+        labelText: 'Campaign name',
+        hintText: 'e.g. My first campaign',
+        border: const OutlineInputBorder(),
+        helperText: readOnly ? 'Boost mode uses post title' : null,
+      ),
+    );
+  }
+}
+
+class _GoalStep extends StatelessWidget {
+  const _GoalStep({
+    required this.selected,
+    required this.onChanged,
+  });
+
+  final CampaignGoal? selected;
+  final ValueChanged<CampaignGoal> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        _tile(
+          context,
+          goal: CampaignGoal.getVisits,
+          title: 'Get Visits',
+          subtitle: 'Drive visits to your website or profile',
+          icon: Icons.public,
+        ),
+        _tile(
+          context,
+          goal: CampaignGoal.getFollowers,
+          title: 'Get Followers',
+          subtitle: 'Grow your audience and followers',
+          icon: Icons.person_add_alt_1,
+        ),
+        _tile(
+          context,
+          goal: CampaignGoal.promotePost,
+          title: 'Promote Post',
+          subtitle: 'Boost an existing post',
+          icon: Icons.bolt_outlined,
+        ),
+        _tile(
+          context,
+          goal: CampaignGoal.appInstall,
+          title: 'App Install',
+          subtitle: 'Get more installs for your app',
+          icon: Icons.install_mobile,
+        ),
+        _tile(
+          context,
+          goal: CampaignGoal.websiteClick,
+          title: 'Website Click',
+          subtitle: 'Optimized for clicks',
+          icon: Icons.ads_click,
+        ),
+      ],
+    );
+  }
+
+  Widget _tile(
+    BuildContext context, {
+    required CampaignGoal goal,
+    required String title,
+    required String subtitle,
+    required IconData icon,
+  }) {
+    final sel = selected == goal;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: sel
+              ? themeAccentSolid(context).withValues(alpha: 0.35)
+              : textLightGrey(context).withValues(alpha: 0.16),
+        ),
+      ),
+      child: ListTile(
+        onTap: () => onChanged(goal),
+        leading: Icon(icon, color: themeAccentSolid(context)),
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w900)),
+        subtitle: Text(
+          subtitle,
+          style: TextStyle(fontSize: 12, color: textLightGrey(context)),
+        ),
+        trailing: sel
+            ? Icon(Icons.check_circle, color: themeAccentSolid(context))
+            : Icon(Icons.circle_outlined,
+                color: textLightGrey(context).withValues(alpha: 0.6)),
+      ),
+    );
+  }
+}
+
+class _MediaStep extends StatelessWidget {
+  const _MediaStep({
+    required this.isBoostMode,
+    required this.postId,
+    required this.postTitle,
+    required this.postCaption,
+    required this.mediaUrl,
+    required this.postType,
+    required this.pickedMediaUrl,
+    required this.onPickedMediaUrl,
+    required this.selectedPostId,
+    required this.selectedPostCaption,
+    required this.selectedPostType,
+    required this.selectedPostPreviewUrl,
+    required this.onPickPost,
+    required this.onClearPost,
+    required this.onUploadMedia,
+  });
+
+  final bool isBoostMode;
+  final int? postId;
+  final String? postTitle;
+  final String? postCaption;
+  final String? mediaUrl;
+  final PostType? postType;
+
+  final String? pickedMediaUrl;
+  final ValueChanged<String?> onPickedMediaUrl;
+
+  final int? selectedPostId;
+  final String? selectedPostCaption;
+  final PostType? selectedPostType;
+  final String? selectedPostPreviewUrl;
+  final Future<void> Function() onPickPost;
+  final VoidCallback onClearPost;
+  final Future<void> Function() onUploadMedia;
+
+  @override
+  Widget build(BuildContext context) {
+    if (isBoostMode) {
+      final effectiveId = (selectedPostId ?? postId);
+      final effectiveTitle = (postTitle ?? '').trim();
+      final effectiveCaption =
+          (selectedPostCaption ?? postCaption ?? '').trim();
+      final effectiveMedia =
+          (selectedPostPreviewUrl ?? mediaUrl ?? '').trim();
+      final isVideo =
+          (selectedPostType ?? postType) == PostType.video || (selectedPostType == PostType.reel);
+
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Theme.of(context).cardColor,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: textLightGrey(context).withValues(alpha: 0.16),
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  isVideo
+                      ? Icons.video_library_outlined
+                      : Icons.image_outlined,
+                  color: themeAccentSolid(context),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    effectiveTitle.isNotEmpty ? effectiveTitle : 'Selected post',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w900,
+                      color: textDarkGrey(context),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            if (effectiveCaption.isNotEmpty)
+              Text(
+                effectiveCaption,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12,
+                  height: 1.35,
+                  color: textLightGrey(context),
+                ),
+              ),
+            if (effectiveCaption.isNotEmpty) const SizedBox(height: 8),
+            Text(
+              'Post ID: ${effectiveId ?? '-'}\nMedia: ${effectiveMedia.isNotEmpty ? effectiveMedia : '(mock)'}',
+              style: TextStyle(
+                fontSize: 12,
+                height: 1.35,
+                color: textLightGrey(context),
+              ),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              height: 48,
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: onPickPost,
+                icon: const Icon(Icons.grid_view_outlined),
+                label: const Text('Select Existing Post'),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final hasSelectedPost = (selectedPostId ?? 0) > 0;
+    final caption = (selectedPostCaption ?? '').trim();
+    final preview = (selectedPostPreviewUrl ?? '').trim();
+    final isReel = selectedPostType == PostType.reel;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Upload image/video or select existing post (Phase-2 binding).',
+          style: TextStyle(color: textLightGrey(context), fontSize: 12),
+        ),
+        const SizedBox(height: 10),
+        if (hasSelectedPost)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Theme.of(context).cardColor,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: textLightGrey(context).withValues(alpha: 0.16),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      isReel ? Icons.video_library_outlined : Icons.image_outlined,
+                      color: themeAccentSolid(context),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Selected Post #$selectedPostId',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w900,
+                          color: textDarkGrey(context),
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: onClearPost,
+                      icon: const Icon(Icons.close),
+                      tooltip: 'Clear',
+                    ),
+                  ],
+                ),
+                if (caption.isNotEmpty)
+                  Text(
+                    caption,
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      height: 1.35,
+                      color: textLightGrey(context),
+                    ),
+                  ),
+                if (preview.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    'Preview: $preview',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: textLightGrey(context),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        if (hasSelectedPost) const SizedBox(height: 10),
+        TextFormField(
+          decoration: const InputDecoration(
+            labelText: 'Media URL (optional)',
+            hintText: 'https://...',
+            border: OutlineInputBorder(),
+          ),
+          readOnly: hasSelectedPost,
+          initialValue: pickedMediaUrl ?? '',
+          onChanged: (v) {
+            final s = v.trim();
+            onPickedMediaUrl(s.isEmpty ? null : s);
+          },
+        ),
+        const SizedBox(height: 10),
+        SizedBox(
+          height: 48,
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: onUploadMedia,
+            icon: const Icon(Icons.upload_file_outlined),
+            label: const Text('Upload Media'),
+          ),
+        ),
+        const SizedBox(height: 10),
+        SizedBox(
+          height: 48,
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: onPickPost,
+            icon: const Icon(Icons.grid_view_outlined),
+            label: const Text('Select Existing Post'),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _PlacementStep extends StatelessWidget {
+  const _PlacementStep({
+    required this.selected,
+    required this.onChanged,
+  });
+
+  final CampaignPlacement selected;
+  final ValueChanged<CampaignPlacement> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Choose placement',
+          style: TextStyle(
+            fontWeight: FontWeight.w800,
+            color: textDarkGrey(context),
+          ),
+        ),
+        const SizedBox(height: 10),
+        _item(context, CampaignPlacement.feed, 'Feed', Icons.view_agenda_outlined),
+        _item(context, CampaignPlacement.reel, 'Reel', Icons.video_library_outlined),
+        _item(context, CampaignPlacement.story, 'Story', Icons.auto_stories_outlined),
+        _item(context, CampaignPlacement.profile, 'Profile', Icons.person_outline),
+        _item(context, CampaignPlacement.explore, 'Explore', Icons.explore_outlined),
+      ],
+    );
+  }
+
+  Widget _item(BuildContext context, CampaignPlacement p, String label, IconData icon) {
+    final sel = selected == p;
+    return GestureDetector(
+      onTap: () => onChanged(p),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+        decoration: BoxDecoration(
+          color: Theme.of(context).cardColor,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: sel
+                ? themeAccentSolid(context).withValues(alpha: 0.35)
+                : textLightGrey(context).withValues(alpha: 0.16),
+            width: sel ? 1.5 : 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: sel ? themeAccentSolid(context) : textLightGrey(context)),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontWeight: FontWeight.w900,
+                  color: sel ? textDarkGrey(context) : textLightGrey(context),
+                ),
+              ),
+            ),
+            if (sel)
+              Icon(Icons.check_circle, color: themeAccentSolid(context), size: 20),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AudienceStep extends StatelessWidget {
+  const _AudienceStep({
+    required this.country,
+    required this.onPick,
+    required this.countriesLoaded,
+  });
+
+  final String? country;
+  final VoidCallback onPick;
+  final bool countriesLoaded;
+
+  @override
+  Widget build(BuildContext context) {
+    final v = (country ?? '').trim();
+    final label = v.isEmpty
+        ? 'Select'
+        : (v.toLowerCase() == 'all')
+            ? 'All countries'
+            : v.toUpperCase();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          height: 52,
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: countriesLoaded
+                ? onPick
+                : () {
+                    BaseController.share.showSnackBar('Loading countries...');
+                  },
+            icon: const Icon(Icons.public),
+            label: Text(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.w900),
+            ),
+            style: OutlinedButton.styleFrom(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Choose country code or select All (worldwide).',
+          style: TextStyle(fontSize: 12, color: textLightGrey(context)),
+        ),
+      ],
+    );
+  }
+}
+
+class _BudgetStep extends StatelessWidget {
+  const _BudgetStep({
+    required this.daily,
+    required this.total,
+    required this.onChangedDaily,
+    required this.onChangedTotal,
+    required this.isBoostMode,
+  });
+
+  final num? daily;
+  final num? total;
+  final bool isBoostMode;
+  final ValueChanged<num> onChangedDaily;
+  final ValueChanged<num> onChangedTotal;
+
+  @override
+  Widget build(BuildContext context) {
+    final d = (daily ?? 0);
+    final t = (total ?? 0);
+    final showHint = d > 0 && t > 0 && d > t;
+    final currency = isBoostMode ? 'Coins' : '\$';
+    final labelSuffix = isBoostMode ? '(Coins)' : '(Money)';
+
+    return Column(
+      children: [
+        if (isBoostMode)
+          Container(
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.blue.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.blue.withValues(alpha: 0.3)),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.bolt, color: Colors.blue),
+                SizedBox(width: 8),
+                Expanded(child: Text('Boosts use Iyol Coins from your coin wallet.')),
+              ],
+            ),
+          ),
+        TextFormField(
+          keyboardType: TextInputType.number,
+          decoration: InputDecoration(
+            labelText: 'Daily budget $labelSuffix',
+            hintText: 'e.g. 10',
+            border: const OutlineInputBorder(),
+            prefixText: isBoostMode ? null : '\$ ',
+            suffixText: isBoostMode ? 'Coins' : null,
+          ),
+          onChanged: (v) => onChangedDaily(num.tryParse(v) ?? 0),
+          initialValue: daily == null ? '' : daily.toString(),
+        ),
+        const SizedBox(height: 10),
+        TextFormField(
+          keyboardType: TextInputType.number,
+          decoration: InputDecoration(
+            labelText: 'Total budget $labelSuffix',
+            hintText: 'e.g. 100',
+            border: const OutlineInputBorder(),
+            prefixText: isBoostMode ? null : '\$ ',
+            suffixText: isBoostMode ? 'Coins' : null,
+          ),
+          onChanged: (v) => onChangedTotal(num.tryParse(v) ?? 0),
+          initialValue: total == null ? '' : total.toString(),
+        ),
+        if (showHint) ...[
+          const SizedBox(height: 10),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.orange.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: Colors.orange.withValues(alpha: 0.22),
+              ),
+            ),
+            child: Text(
+              'Daily budget is higher than total budget. Consider adjusting.',
+              style: TextStyle(
+                fontSize: 12,
+                height: 1.35,
+                color: textDarkGrey(context),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _PreviewStep extends StatelessWidget {
+  const _PreviewStep({
+    required this.goal,
+    required this.placement,
+    required this.country,
+    required this.dailyBudget,
+    required this.totalBudget,
+    required this.mediaUrl,
+    required this.selectedPostId,
+    required this.loadingEstimate,
+    this.estAd,
+    this.estBoost,
+  });
+
+  final CampaignGoal? goal;
+  final CampaignPlacement placement;
+  final String? country;
+  final num? dailyBudget;
+  final num? totalBudget;
+  final String? mediaUrl;
+  final int? selectedPostId;
+  final bool loadingEstimate;
+  final AdEstimateData? estAd;
+  final BoostEstimateData? estBoost;
+
+  @override
+  Widget build(BuildContext context) {
+    final cc = (country ?? '').trim();
+    final countryLabel = cc.isEmpty
+        ? '-'
+        : (cc.toLowerCase() == 'all')
+            ? 'All'
+            : cc.toUpperCase();
+    final hasPost = (selectedPostId ?? 0) > 0;
+    final media = (mediaUrl ?? '').trim();
+    final mediaLabel = hasPost
+        ? 'Post #$selectedPostId '
+        : (media.isNotEmpty ? media : '-');
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 20),
+        const AdsSectionHeader(title: 'Estimated Results'),
+        const SizedBox(height: 10),
+        if (loadingEstimate)
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: Theme.of(context).cardColor,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: textLightGrey(context).withValues(alpha: 0.16),
+              ),
+            ),
+            child: Column(
+              children: [
+                const SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Calculating estimated reach...',
+                  style: TextStyle(
+                    color: textLightGrey(context),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          )
+        else if (estAd != null || estBoost != null)
+          Container(
+            padding: const EdgeInsets.all(16),
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: Colors.green.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: Colors.green.withValues(alpha: 0.3),
+              ),
+            ),
+            child: Column(
+              children: [
+                if (estAd != null) ...[
+                  _estRow(context, 'Impressions',
+                      '${estAd!.estimatedImpressionsMin} - ${estAd!.estimatedImpressionsMax}'),
+                  const SizedBox(height: 8),
+                  _estRow(context, 'Clicks',
+                      '${estAd!.estimatedClicksMin ?? 0} - ${estAd!.estimatedClicksMax ?? 0}'),
+                  const SizedBox(height: 8),
+                  _estRow(context, 'Reach',
+                      '${(estAd!.estimatedImpressionsMin ?? 0) * 0.8} - ${(estAd!.estimatedImpressionsMax ?? 0) * 0.9}'),
+                ],
+                if (estBoost != null) ...[
+                   _estRow(context, 'Reach',
+                      '${estBoost!.estimatedReachMin} - ${estBoost!.estimatedReachMax}'),
+                  const SizedBox(height: 8),
+                  _estRow(context, 'Impressions',
+                      '${estBoost!.estimatedImpressionsMin} - ${estBoost!.estimatedImpressionsMax}'),
+                ],
+              ],
+            ),
+          )
+        else
+          Container(
+            padding: const EdgeInsets.all(16),
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: Theme.of(context).cardColor,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: textLightGrey(context).withValues(alpha: 0.16),
+              ),
+            ),
+            child: Center(
+              child: Text(
+                'Enter budget to see estimates',
+                style: TextStyle(color: textLightGrey(context)),
+              ),
+            ),
+          ),
+        
+        const SizedBox(height: 20),
+        const AdsSectionHeader(title: 'Campaign Summary'),
+        const SizedBox(height: 10),
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Theme.of(context).cardColor,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: textLightGrey(context).withValues(alpha: 0.16),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _summaryRow(context, 'Goal', goal?.name ?? '-'),
+              const Divider(height: 16),
+              _summaryRow(context, 'Placement', placement.name),
+              const Divider(height: 16),
+              _summaryRow(context, 'Audience', countryLabel),
+              const Divider(height: 16),
+              _summaryRow(context, 'Daily Budget', '${dailyBudget ?? '-'}'),
+              const Divider(height: 16),
+              _summaryRow(context, 'Total Budget', '${totalBudget ?? '-'}'),
+              const Divider(height: 16),
+              _summaryRow(context, 'Media', mediaLabel),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _estRow(BuildContext context, String label, String value) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(label, style: TextStyle(color: textDarkGrey(context))),
+        Text(
+          value,
+          style: TextStyle(
+            color: textDarkGrey(context),
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _summaryRow(BuildContext context, String label, String value) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 100,
+          child: Text(
+            label,
+            style: TextStyle(
+              color: textLightGrey(context),
+              fontSize: 13,
+            ),
+          ),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            style: TextStyle(
+              color: textDarkGrey(context),
+              fontWeight: FontWeight.w700,
+              fontSize: 13,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _PaySubmitStep extends StatelessWidget {
+  const _PaySubmitStep({
+    required this.onSubmit,
+    required this.onSaveDraft,
+    required this.walletBalance,
+    required this.totalBudget,
+  });
+
+  final VoidCallback onSubmit;
+  final VoidCallback onSaveDraft;
+
+  final num? walletBalance;
+  final num? totalBudget;
+
+  @override
+  Widget build(BuildContext context) {
+    final wb = walletBalance;
+    final total = totalBudget ?? 0;
+    final bool showWarning = wb != null && total > 0 && total > wb;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (showWarning)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.orange.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: Colors.orange.withValues(alpha: 0.22),
+              ),
+            ),
+            child: Text(
+              'Insufficient balance. Available: ${wb.toStringAsFixed(2) ?? '-'} | Required: ${total.toStringAsFixed(2)}',
+              style: TextStyle(
+                fontSize: 12,
+                height: 1.35,
+                color: textDarkGrey(context),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        if (showWarning) const SizedBox(height: 12),
+        
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+             color: Theme.of(context).cardColor,
+             borderRadius: BorderRadius.circular(16),
+             border: Border.all(color: textLightGrey(context).withValues(alpha: 0.16)),
+          ),
+          child: Column(
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('Total Budget', style: TextStyle(color: textLightGrey(context))),
+                  Text(total.toStringAsFixed(2), style: TextStyle(fontWeight: FontWeight.w900, color: textDarkGrey(context))),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('Current Balance', style: TextStyle(color: textLightGrey(context))),
+                  Text(wb?.toStringAsFixed(2) ?? '-', style: TextStyle(fontWeight: FontWeight.w900, color: textDarkGrey(context))),
+                ],
+              ),
+              const Divider(height: 24),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('Remaining after', style: TextStyle(color: textLightGrey(context))),
+                  Text(((wb ?? 0) - total).toStringAsFixed(2), 
+                    style: TextStyle(
+                      fontWeight: FontWeight.w900, 
+                      color: ((wb ?? 0) - total) < 0 ? Colors.red : Colors.green
+                    )
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        
+        const SizedBox(height: 24),
+        SizedBox(
+          height: 52,
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: onSaveDraft,
+            icon: const Icon(Icons.save_as_outlined),
+            label: const Text(
+              'Save as Draft',
+              style: TextStyle(fontWeight: FontWeight.w900),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.orange,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        SizedBox(
+          height: 52,
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: onSubmit,
+            icon: const Icon(Icons.check_circle_outline),
+            label: const Text(
+              'Confirm & Submit',
+              style: TextStyle(fontWeight: FontWeight.w900),
+            ),
+            style: ElevatedButton.styleFrom(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+ˆx

@@ -1,0 +1,69 @@
+ext {
+    bnb_sdk_version = '1.17.+'
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+        maven { url "https://jitpack.io" }
+        flatDir { dirs 'libs' }
+        flatDir { dirs "${project(':deepar_flutter_plus').projectDir}/libs" }
+    }
+}
+
+rootProject.buildDir = "../build"
+subprojects {
+    project.buildDir = "${rootProject.buildDir}/${project.name}"
+}
+subprojects {
+    afterEvaluate { project ->
+        if (project.hasProperty('android')) {
+            project.android {
+                if (namespace == null || namespace.toString().trim().isEmpty()) {
+                    try {
+                        def manifestFile = project.android.sourceSets?.main?.manifest?.srcFile
+                        if (manifestFile != null && manifestFile.exists()) {
+                            def manifestText = manifestFile.getText('UTF-8')
+                            def m = (manifestText =~ /package\s*=\s*\"([^\"]+)\"/)
+                            if (m.find()) {
+                                namespace m.group(1)
+                            } else {
+                                namespace project.group
+                            }
+                        } else {
+                            namespace project.group
+                        }
+                    } catch (Throwable ignored) {
+                        namespace project.group
+                    }
+                }
+                compileOptions {
+                    sourceCompatibility = JavaVersion.VERSION_17
+                    targetCompatibility = JavaVersion.VERSION_17
+                }
+                // Ensure compileSdk/minSdk are set for library modules too
+                if (project.plugins.hasPlugin('com.android.library') || project.plugins.hasPlugin('com.android.application')) {
+                    compileSdk = 36
+                    defaultConfig {
+                        minSdk = 26
+                    }
+                    ndkVersion = "26.1.10909125"
+                }
+            }
+            tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+                kotlinOptions {
+                    jvmTarget = "17"
+                }
+            }
+        }
+    }
+}
+subprojects {
+    project.evaluationDependsOn(":app")
+}
+
+
+tasks.register("clean", Delete) {
+    delete rootProject.buildDir
+}

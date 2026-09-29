@@ -1,0 +1,36 @@
+„î…ï…ğƒœ€file:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/pretty_qr_code-3.6.0/lib/src/rendering/capabilities/pretty_qr_capabilities_io.dartƒú// ignore_for_file: prefer-static-class
+
+import 'dart:io';
+
+import 'package:meta/meta.dart';
+
+/// The dart:io implementation of [isSkwasm].
+///
+/// This bool shouldn't be used outside of web.
+@internal
+bool get isSkwasm {
+  throw UnimplementedError('isSkwasm is not implemented for dart:io.');
+}
+
+/// The dart:io implementation of [isCanvasKit].
+///
+/// This bool shouldn't be used outside of web.
+@internal
+bool get isCanvasKit {
+  throw UnimplementedError('isCanvasKit is not implemented for dart:io.');
+}
+
+/// Attempts to indirectly detect whether the `Impeller` rendering engine has
+/// fallback to no index buffer.
+///
+/// For more information, see impleller
+/// [issue #126212](https://github.com/flutter/flutter/issues/126212) topic.
+@internal
+final isImpellerWithoutNoIndexBufferFallback = () {
+  if (!Platform.isIOS) return false;
+  final runtimeVersion = Platform.version;
+  return !runtimeVersion.startsWith('3.2') &&
+      !runtimeVersion.startsWith('3.3') &&
+      !runtimeVersion.startsWith('3.4');
+}();
+%

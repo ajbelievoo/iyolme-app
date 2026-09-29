@@ -1,0 +1,73 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.buildlog/
+.history
+.svn/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# VS Code / Windsurf local settings
+.vscode/
+.windsurf/
+
+# Devin local config
+.devin/config.local*.json
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+build/
+**/build/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# Gradle / Android
+.gradle/
+.kotlin/
+/captures/
+local.properties
+**/local.properties
+hs_err_pid*.log
+replay_pid*.log
+
+# Secrets — NEVER commit
+.env
+.env.*
+!.env.example
+key.properties
+key.properties.txt
+**/key.properties
+**/*.keystore
+**/*.jks
+google-services.json
+GoogleService-Info.plist
+
+# Signing / SSH keys
+hitune_key
+hitune_key.pub
+id_ed25519
+id_ed25519.pub

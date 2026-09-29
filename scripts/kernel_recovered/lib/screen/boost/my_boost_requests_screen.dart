@@ -1,0 +1,74 @@
+import 'package:flutter/material.dart';
+import 'package:shortzz/common/service/api/boost_service.dart';
+import 'package:shortzz/model/boost/boost_model.dart';
+import 'package:shortzz/utilities/theme_res.dart';
+
+class MyBoostRequestsScreen extends StatefulWidget {
+  const MyBoostRequestsScreen({super.key});
+
+  @override
+  State<MyBoostRequestsScreen> createState() => _MyBoostRequestsScreenState();
+}
+
+class _MyBoostRequestsScreenState extends State<MyBoostRequestsScreen> {
+  bool _isLoading = true;
+  List<BoostRequest> _items = <BoostRequest>[];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _isLoading = true;
+    });
+    try {
+      _items = await BoostService.instance.fetchMyBoostRequests();
+    } catch (_) {
+      _items = <BoostRequest>[];
+    }
+    if (!mounted) return;
+    setState(() {
+      _isLoading = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: scaffoldBackgroundColor(context),
+      appBar: AppBar(
+        title: const Text('My Boost Requests'),
+        backgroundColor: scaffoldBackgroundColor(context),
+      ),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : RefreshIndicator(
+              onRefresh: _load,
+              child: _items.isEmpty
+                  ? ListView(
+                      children: const [
+                        SizedBox(height: 100),
+                        Center(child: Text('No boost requests')),
+                      ],
+                    )
+                  : ListView.builder(
+                      itemCount: _items.length,
+                      itemBuilder: (context, index) {
+                        final b = _items[index];
+                        final status = (b.status ?? '').toString();
+                        return ListTile(
+                          title: Text('Post ID: ${b.postId ?? ''}'),
+                          subtitle: Text('Budget: ${b.budget ?? ''}\nStatus: $status'),
+                          trailing: const Icon(Icons.chevron_right),
+                          onTap: () {},
+                        );
+                      },
+                    ),
+            ),
+    );
+  }
+}
+K

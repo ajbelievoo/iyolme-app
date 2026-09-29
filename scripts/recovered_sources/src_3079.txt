@@ -1,0 +1,205 @@
+Cfile:///E:/flutterapp_pro/lib/common/service/api/boost_service.dartšÅimport 'package:shortzz/common/service/api/api_service.dart';
+import 'package:shortzz/common/service/utils/params.dart';
+import 'package:shortzz/common/service/utils/web_service.dart';
+import 'package:shortzz/model/boost/boost_estimate.dart';
+import 'package:shortzz/model/general/status_model.dart';
+import 'package:shortzz/model/boost/boost_model.dart';
+import 'package:shortzz/model/post_story/post_model.dart';
+
+class BoostService {
+  BoostService._();
+
+  static final BoostService instance = BoostService._();
+
+  Future<BoostEstimateResponse> getEstimate({
+    required int budgetCoins,
+    required int durationHours,
+    required String placement,
+  }) async {
+    final response = await ApiService.instance.call(
+      url: WebService.boost.estimate,
+      fromJson: BoostEstimateResponse.fromJson,
+      param: {
+        Params.budgetCoins: budgetCoins,
+        Params.durationHours: durationHours,
+        Params.placement: placement,
+      },
+    );
+    return response;
+  }
+
+  Future<StatusModel> createBoostRequest({
+    required int postId,
+    required int budgetCoins,
+    required int durationHours,
+    required String placement,
+    String? title,
+    String? targetCountry,
+    int? targetAgeMin,
+    int? targetAgeMax,
+    int? targetGender,
+    String? metadataJson,
+    String? status,
+  }) async {
+    try {
+      StatusModel model = await ApiService.instance.call(
+        url: WebService.boost.createBoostRequest,
+        fromJson: StatusModel.fromJson,
+        param: {
+          Params.postId: postId,
+          'postId': postId,
+          Params.budgetCoins: budgetCoins,
+          Params.durationHours: durationHours,
+          Params.placement: placement == 'reels' ? 'reel' : placement,
+          if (title != null) Params.title: title,
+          if (targetCountry != null && targetCountry.trim().toLowerCase() != 'all') Params.targetCountry: targetCountry,
+          if (targetCountry != null && targetCountry.trim().toLowerCase() != 'all') Params.country: targetCountry,
+          if (targetAgeMin != null) Params.targetAgeMin: targetAgeMin,
+          if (targetAgeMax != null) Params.targetAgeMax: targetAgeMax,
+          if (targetGender != null) Params.targetGender: targetGender,
+          if (metadataJson != null) Params.metadataJson: metadataJson,
+          if (status != null) 'status': status,
+        },
+      );
+      return model;
+    } catch (_) {
+      StatusModel model = await ApiService.instance.call(
+        url: WebService.boost.createBoostRequest,
+        fromJson: StatusModel.fromJson,
+        param: {
+          'postId': postId,
+          'post_id': postId,
+          Params.budget: budgetCoins,
+          Params.budgetCoins: budgetCoins,
+          Params.duration: durationHours,
+          Params.durationHours: durationHours,
+          Params.placement: placement == 'reels' ? 'reel' : placement,
+          if (title != null) Params.title: title,
+          if (targetCountry != null && targetCountry.trim().toLowerCase() != 'all') Params.country: targetCountry,
+          if (metadataJson != null) Params.metadataJson: metadataJson,
+          if (status != null) 'statusText': status,
+          if (status != null && status == 'draft') 'isDraft': true,
+        },
+      );
+      return model;
+    }
+  }
+
+  Future<List<BoostRequest>> fetchMyBoostRequests({int? lastItemId}) async {
+    try {
+      BoostRequestsResponse model = await ApiService.instance.call(
+        url: WebService.boost.fetchMyBoostRequests,
+        fromJson: BoostRequestsResponse.fromJson,
+        param: {
+          if (lastItemId != null) Params.lastItemId: lastItemId,
+        },
+      );
+      return model.data ?? [];
+    } catch (e) {
+      final msg = e.toString();
+      final urls = <String>[
+        WebService.boost.fetchMyBoostRequests.replaceAll('fetchMyBoostRequests', 'myRequests'),
+        WebService.boost.fetchMyBoostRequests.replaceAll('fetchMyBoostRequests', 'fetchMyRequests'),
+        WebService.boost.fetchMyBoostRequests.replaceAll('/boost/', '/user/boost/').replaceAll('fetchMyBoostRequests', 'myRequests'),
+      ];
+      for (final u in urls) {
+        try {
+          final Map<String, dynamic> json = await ApiService.instance.get<Map<String, dynamic>>(
+            url: u,
+            param: {
+              if (lastItemId != null) Params.lastItemId: lastItemId,
+            },
+          );
+          dynamic raw = json['data'] ??
+              json['items'] ??
+              json['list'] ??
+              json['results'] ??
+              json['rows'] ??
+              json['requests'] ??
+              json['boostRequests'];
+          if (raw is Map) {
+            raw = raw['data'] ?? raw['items'] ?? raw['list'] ?? raw['results'] ?? raw['rows'];
+          }
+          if (raw is List) {
+            return raw.map((e) => BoostRequest.fromJson(e)).toList();
+          }
+        } catch (_) {
+          continue;
+        }
+      }
+      rethrow;
+    }
+  }
+
+  Future<List<Post>> fetchBoostedPosts({
+    required String placement,
+    String? type,
+    int? lastItemId,
+  }) async {
+    final params = <String, dynamic>{
+      Params.placement: placement,
+      if (type != null) Params.types: type,
+      if (lastItemId != null) Params.lastItemId: lastItemId,
+    };
+
+    Map<String, dynamic> json;
+    try {
+      json = await ApiService.instance.call<Map<String, dynamic>>(
+        url: WebService.boost.fetchBoostedPosts,
+        param: params,
+      );
+    } catch (_) {
+      // Backward-compatible fallback (some backends expose fetch as GET)
+      json = await ApiService.instance.get<Map<String, dynamic>>(
+        url: WebService.boost.fetchBoostedPosts,
+        param: params,
+      );
+    }
+
+    dynamic raw = json['data'] ??
+        json['items'] ??
+        json['list'] ??
+        json['results'] ??
+        json['rows'] ??
+        json['posts'] ??
+        json['boostedPosts'];
+
+    if (raw is Map) {
+      raw = raw['data'] ??
+          raw['items'] ??
+          raw['list'] ??
+          raw['results'] ??
+          raw['rows'] ??
+          raw['posts'];
+    }
+
+    if (raw is List) {
+      return raw.map((e) => Post.fromJson(e)).toList();
+    }
+    return <Post>[];
+  }
+
+  Future<StatusModel> trackBoostEvent({
+    int? boostId,
+    int? postId,
+    String? event,
+    String? placement,
+    String? action,
+    String? metadataJson,
+  }) async {
+    StatusModel model = await ApiService.instance.call(
+      url: WebService.boost.trackBoostEvent,
+      fromJson: StatusModel.fromJson,
+      param: {
+        if (boostId != null) Params.boostId: boostId,
+        if (postId != null) Params.postId: postId,
+        if (event != null) Params.event: event,
+        if (placement != null) Params.placement: placement,
+        if (action != null) Params.action: action,
+        if (metadataJson != null) Params.metadataJson: metadataJson,
+      },
+    );
+    return model;
+  }
+}
+€Î

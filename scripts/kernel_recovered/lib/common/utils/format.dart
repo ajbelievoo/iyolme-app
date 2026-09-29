@@ -1,0 +1,21 @@
+import 'package:intl/intl.dart';
+import 'package:shortzz/common/manager/session_manager.dart';
+
+String formatCurrency(num value) {
+  final currency = SessionManager.instance.getCurrency();
+  // Try locale-aware format, fallback to simple
+  try {
+    final f = NumberFormat.currency(symbol: '$currency ', decimalDigits: 2);
+    return f.format(value);
+  } catch (_) {
+    return '$currency ${value.toStringAsFixed(2)}';
+  }
+}
+
+String formatCompact(num value) {
+  try {
+    return NumberFormat.compact().format(value);
+  } catch (_) {
+    return value.toString();
+  }
+}

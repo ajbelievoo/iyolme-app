@@ -1,0 +1,8 @@
+sdk.dir=YOUR_ANDROID_SDK_PATH
+flutter.sdk=YOUR_FLUTTER_SDK_PATH
+flutter.buildMode=debug
+flutter.versionName=1.0.1
+flutter.versionCode=42
+# Secret keys - never commit the real local.properties
+google.maps.api.key=YOUR_GOOGLE_MAPS_API_KEY
+admob.app.id=YOUR_ADMOB_APP_ID

@@ -1,0 +1,703 @@
+import 'package:flutter/material.dart';
+import 'package:shortzz/common/controller/base_controller.dart';
+import 'package:shortzz/common/service/api/post_service.dart';
+import 'package:shortzz/common/utils/format.dart';
+import 'package:shortzz/common/widget/ads_metric_cards.dart';
+import 'package:fl_chart/fl_chart.dart';
+import 'package:shortzz/common/manager/session_manager.dart';
+import 'package:shortzz/model/user_model/user_model.dart';
+import 'package:shortzz/screen/ads_manager/ads_manager_screen.dart';
+import 'package:shortzz/screen/ads_manager/data/ads_repository.dart';
+import 'package:shortzz/screen/ads_manager/data/ads_dto.dart';
+import 'package:shortzz/screen/ads_manager/mock/ads_manager_mock_data.dart';
+import 'package:shortzz/screen/ads_manager/screen/campaign_analytics/campaign_analytics_screen.dart';
+import 'package:shortzz/screen/ads_manager/screen/create_campaign/create_campaign_screen.dart';
+import 'package:shortzz/screen/ads_manager/widget/ads_empty_state.dart';
+import 'package:shortzz/screen/ads_manager/widget/ads_line_chart_placeholder.dart';
+import 'package:shortzz/screen/ads_manager/widget/ads_section_header.dart';
+import 'package:shortzz/screen/ads_manager/widget/ads_skeleton_card.dart';
+import 'package:shortzz/screen/ads_manager/widget/ads_time_range_switch.dart';
+import 'package:shortzz/screen/ads_manager/widget/ads_wallet_hero_card.dart';
+import 'package:shortzz/utilities/theme_res.dart';
+
+class AdsDashboardTab extends StatefulWidget {
+  const AdsDashboardTab({super.key});
+
+  @override
+  State<AdsDashboardTab> createState() => _AdsDashboardTabState();
+}
+
+class _AdsDashboardTabState extends State<AdsDashboardTab>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  final AdsManagerRepository _repo = AdsManagerRepository();
+  num? _walletBalance;
+  List<AdsManagerCampaignItem>? _recentCampaigns;
+  AdsManagerOverallAnalyticsDto? _overall;
+  bool _loading = true;
+  String? _error;
+  bool _analyticsForbidden = false;
+
+  AdsTimeRange _range = AdsTimeRange.days7;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetch();
+  }
+
+  void _openCampaignsTab() {
+    final controller = DefaultTabController.maybeOf(context);
+    if (controller != null && controller.length >= 2) {
+      controller.animateTo(1);
+      return;
+    }
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => const AdsManagerScreen(initialTabIndex: 1),
+      ),
+    );
+  }
+
+  void _openWalletTab() {
+    final controller = DefaultTabController.maybeOf(context);
+    if (controller != null && controller.length >= 3) {
+      controller.animateTo(2);
+      return;
+    }
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => const AdsManagerScreen(initialTabIndex: 2),
+      ),
+    );
+  }
+
+  String _rangeParam(AdsTimeRange range) {
+    switch (range) {
+      case AdsTimeRange.days7:
+        return '7d';
+      case AdsTimeRange.days30:
+        return '30d';
+    }
+  }
+
+  Future<void> _fetch() async {
+    if (!mounted) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+      _analyticsForbidden = false;
+    });
+
+    try {
+      final User? user = SessionManager.instance.getUser();
+      const canWallet = true;
+      const canAnalytics = true;
+
+      AdsManagerWalletDto? wallet;
+      List<AdsManagerCampaignItem>? campaigns;
+      AdsManagerOverallAnalyticsDto? overall;
+
+      try {
+        wallet = await _repo.fetchWalletRaw();
+      } catch (_) {
+        wallet = null;
+      }
+
+      try {
+        campaigns = await _repo.listCampaigns();
+      } catch (_) {
+        campaigns = null;
+      }
+
+      try {
+        overall = await _repo.fetchOverallAnalytics(
+          range: _rangeParam(_range),
+        );
+      } catch (e) {
+        final msg = e.toString();
+        if (msg.contains('403') || msg.toLowerCase().contains('forbidden')) {
+          _analyticsForbidden = true;
+        }
+        overall = null;
+      }
+
+      if (campaigns == null && overall == null && (canWallet && wallet == null)) {
+        throw Exception('Could not load dashboard');
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _walletBalance = wallet?.balance;
+        _recentCampaigns = campaigns;
+        _overall = overall;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _walletBalance = null;
+        _recentCampaigns = null;
+        _overall = null;
+        _loading = false;
+        _error = e.toString();
+      });
+    }
+  }
+
+  Future<void> _fetchOverallOnly(AdsTimeRange next) async {
+    if (!mounted) return;
+
+    final User? user = SessionManager.instance.getUser();
+    if (user?.hasPermission('analytics_access') != true) {
+      return;
+    }
+
+    if (_analyticsForbidden) {
+      return;
+    }
+
+    setState(() {
+      _range = next;
+    });
+
+    try {
+      final overall = await _repo.fetchOverallAnalytics(
+        range: _rangeParam(next),
+      );
+      if (!mounted) return;
+      setState(() {
+        _overall = overall;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      final msg = e.toString();
+      if (msg.contains('403') || msg.toLowerCase().contains('forbidden')) {
+        setState(() {
+          _analyticsForbidden = true;
+          _overall = null;
+        });
+        return;
+      }
+      BaseController.share.showSnackBar(msg);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+
+    final User? user = SessionManager.instance.getUser();
+    const canWallet = true;
+    const canEditCampaigns = true;
+    final canAnalytics = _analyticsForbidden != true;
+
+    final recent = _recentCampaigns ?? const <AdsManagerCampaignItem>[];
+    final walletBalance = _walletBalance;
+
+    final totalSpend = _overall?.totalSpend;
+    final totalImpressions = _overall?.totalImpressions;
+    final totalClicks = _overall?.totalClicks;
+
+    return RefreshIndicator(
+      onRefresh: _fetch,
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          if (_loading) ...const [
+            AdsSkeletonCard(height: 92),
+            SizedBox(height: 14),
+            AdsSkeletonCard(height: 170),
+            SizedBox(height: 14),
+            AdsSkeletonCard(height: 110),
+            SizedBox(height: 10),
+            AdsSkeletonCard(height: 110),
+            SizedBox(height: 10),
+            AdsSkeletonCard(height: 110),
+          ] else if ((_error ?? '').trim().isNotEmpty) ...[
+            AdsSectionHeader(
+              title: 'Dashboard',
+              action: TextButton.icon(
+                onPressed: _fetch,
+                icon: const Icon(Icons.refresh, size: 18),
+                label: const Text('Retry'),
+              ),
+            ),
+            const SizedBox(height: 10),
+            AdsEmptyState(
+              title: 'Could not load dashboard',
+              subtitle: _error,
+              icon: Icons.wifi_off,
+              action: ElevatedButton(
+                onPressed: _fetch,
+                child: const Text('Try again'),
+              ),
+            ),
+          ] else ...[
+          AdsWalletHeroCard(
+            balance: (walletBalance ?? 0),
+            onAddMoney: () {
+              _openWalletTab();
+            },
+          ),
+          const SizedBox(height: 14),
+          AdsMetricCardsGrid(
+            items: [
+              AdsMetric(
+                label: 'Spend',
+                value: totalSpend == null
+                    ? '-'
+                    : totalSpend.toStringAsFixed(2),
+                icon: Icons.payments_outlined,
+                color: Colors.deepOrange,
+              ),
+              AdsMetric(
+                label: 'Impressions',
+                value: totalImpressions == null
+                    ? '-'
+                    : formatCompact(totalImpressions),
+                icon: Icons.visibility_outlined,
+                color: Colors.indigo,
+              ),
+              AdsMetric(
+                label: 'Clicks',
+                value: totalClicks == null ? '-' : formatCompact(totalClicks),
+                icon: Icons.ads_click,
+                color: Colors.blue,
+              ),
+              const AdsMetric(
+                label: 'CTR',
+                value: '-',
+                icon: Icons.trending_up,
+                color: Colors.green,
+                subtitle: 'Backend driven',
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          AdsSectionHeader(
+            title: 'Performance',
+            action: AdsTimeRangeSwitch(
+              value: _range,
+              onChanged: (v) {
+                _fetchOverallOnly(v);
+              },
+            ),
+          ),
+          const SizedBox(height: 10),
+          
+          Builder(
+            builder: (context) {
+              final points = _overall?.chartData ?? <AdsManagerOverallAnalyticsPointDto>[];
+              if (points.isEmpty) {
+                return const AdsLineChartPlaceholder(height: 170);
+              }
+              if (!canAnalytics) {
+                return const AdsLineChartPlaceholder(height: 170);
+              }
+              return _OverallAnalyticsLineChart(points: points, height: 170);
+            },
+          ),
+          const SizedBox(height: 16),
+          AdsSectionHeader(
+            title: 'Recent campaigns',
+            action: TextButton(
+              onPressed: () {
+                _openCampaignsTab();
+              },
+              child: const Text('View all'),
+            ),
+          ),
+          const SizedBox(height: 10),
+          if (recent.isEmpty)
+            const AdsEmptyState(
+              title: 'No campaigns yet',
+              subtitle: 'Create a campaign to start tracking performance.',
+              icon: Icons.campaign_outlined,
+            ),
+          ...recent.take(5).map((c) {
+            return Container(
+              margin: const EdgeInsets.only(bottom: 10),
+              decoration: BoxDecoration(
+                color: Theme.of(context).cardColor,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: textLightGrey(context).withValues(alpha: 0.16),
+                ),
+              ),
+              child: ListTile(
+                onTap: canAnalytics
+                    ? () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => CampaignAnalyticsScreen(
+                              campaign: c,
+                            ),
+                          ),
+                        );
+                      }
+                    : null,
+                leading: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: themeAccentSolid(context).withValues(alpha: 0.10),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(
+                    Icons.campaign_outlined,
+                    color: themeAccentSolid(context),
+                  ),
+                ),
+                title: Text(
+                  c.title,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: textDarkGrey(context),
+                  ),
+                ),
+                subtitle: Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    'Status: ${c.status}  •  ${c.placement}\nSpend: ${c.spend} / ${c.budget}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      height: 1.35,
+                      color: textLightGrey(context),
+                    ),
+                  ),
+                ),
+                trailing: Icon(
+                  Icons.chevron_right,
+                  color: textLightGrey(context),
+                ),
+              ),
+            );
+          }),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: 52,
+                  child: ElevatedButton.icon(
+                    onPressed: canEditCampaigns
+                        ? () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => const CreateCampaignScreen(),
+                              ),
+                            );
+                          }
+                        : null,
+                    icon: const Icon(Icons.add_box_outlined),
+                    label: const Text(
+                      'Create Ad',
+                      style: TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: SizedBox(
+                  height: 52,
+                  child: OutlinedButton.icon(
+                    onPressed: canEditCampaigns
+                        ? () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => const CreateCampaignScreen(
+                                  isBoostMode: true,
+                                  postId: 999,
+                                  postTitle: 'Boost Post',
+                                  postCaption: 'Boost your latest post (mock)',
+                                  mediaUrl: 'https://example.com/media.jpg',
+                                  postType: PostType.image,
+                                  openQuickBudgetOnStart: true,
+                                  redirectToAnalyticsOnSubmit: true,
+                                ),
+                              ),
+                            );
+                          }
+                        : null,
+                    icon: const Icon(Icons.bolt_outlined),
+                    label: const Text(
+                      'Boost Post',
+                      style: TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      side: BorderSide(
+                        color: textLightGrey(context).withValues(alpha: 0.35),
+                      ),
+                      foregroundColor: textDarkGrey(context),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (!canEditCampaigns)
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Text(
+                'Campaign actions locked: campaigns_edit permission required',
+                style: TextStyle(
+                  fontSize: 12,
+                  height: 1.35,
+                  color: textLightGrey(context),
+                ),
+              ),
+            ),
+          const SizedBox(height: 12),
+          Text(
+            _range == AdsTimeRange.days7
+                ? 'Showing last 7 days.'
+                : 'Showing last 30 days.',
+            style: TextStyle(
+              fontSize: 12,
+              height: 1.35,
+              color: textLightGrey(context),
+            ),
+          ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _OverallAnalyticsLineChart extends StatelessWidget {
+  const _OverallAnalyticsLineChart({
+    required this.points,
+    required this.height,
+  });
+
+  final List<AdsManagerOverallAnalyticsPointDto> points;
+  final double height;
+
+  DateTime? _tryParseDate(String raw) {
+    if (raw.trim().isEmpty) return null;
+    return DateTime.tryParse(raw);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final items = List<AdsManagerOverallAnalyticsPointDto>.from(points);
+    items.sort((a, b) {
+      final da = _tryParseDate(a.date);
+      final db = _tryParseDate(b.date);
+      if (da == null && db == null) return 0;
+      if (da == null) return -1;
+      if (db == null) return 1;
+      return da.compareTo(db);
+    });
+
+    final spendSpots = <FlSpot>[];
+    final imprSpots = <FlSpot>[];
+    final clickSpots = <FlSpot>[];
+
+    for (var i = 0; i < items.length; i++) {
+      final x = i.toDouble();
+      spendSpots.add(FlSpot(x, items[i].spend.toDouble()));
+      imprSpots.add(FlSpot(x, items[i].impressions.toDouble()));
+      clickSpots.add(FlSpot(x, items[i].clicks.toDouble()));
+    }
+
+    const spendColor = Colors.deepOrange;
+    const imprColor = Colors.indigo;
+    const clickColor = Colors.blue;
+
+    Widget legendDot(Color c) {
+      return Container(
+        width: 10,
+        height: 10,
+        decoration: BoxDecoration(
+          color: c,
+          borderRadius: BorderRadius.circular(999),
+        ),
+      );
+    }
+
+    String shortLabel(String raw) {
+      final dt = _tryParseDate(raw);
+      if (dt == null) return '';
+      final m = dt.month.toString().padLeft(2, '0');
+      final d = dt.day.toString().padLeft(2, '0');
+      return '$m/$d';
+    }
+
+    return Container(
+      height: height,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: Colors.black.withValues(alpha: 0.07),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              legendDot(spendColor),
+              const SizedBox(width: 6),
+              Text(
+                'Spend',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.black.withValues(alpha: 0.65),
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(width: 12),
+              legendDot(imprColor),
+              const SizedBox(width: 6),
+              Text(
+                'Impr',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.black.withValues(alpha: 0.65),
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(width: 12),
+              legendDot(clickColor),
+              const SizedBox(width: 6),
+              Text(
+                'Clicks',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.black.withValues(alpha: 0.65),
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: LineChart(
+              LineChartData(
+                gridData: FlGridData(
+                  show: true,
+                  drawVerticalLine: false,
+                  horizontalInterval: null,
+                  getDrawingHorizontalLine: (value) => FlLine(
+                    color: Colors.black.withValues(alpha: 0.06),
+                    strokeWidth: 1,
+                  ),
+                ),
+                borderData: FlBorderData(show: false),
+                titlesData: FlTitlesData(
+                  topTitles: const AxisTitles(
+                      sideTitles: SideTitles(showTitles: false)),
+                  rightTitles: const AxisTitles(
+                      sideTitles: SideTitles(showTitles: false)),
+                  leftTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 34,
+                      interval: null,
+                      getTitlesWidget: (value, meta) {
+                        return Text(
+                          formatCompact(value.toInt()),
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: textLightGrey(context),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  bottomTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 22,
+                      interval: 1,
+                      getTitlesWidget: (value, meta) {
+                        final i = value.toInt();
+                        if (i < 0 || i >= items.length) {
+                          return const SizedBox.shrink();
+                        }
+
+                        final showEvery = (items.length <= 7)
+                            ? 1
+                            : (items.length <= 14)
+                                ? 2
+                                : 4;
+
+                        if (i % showEvery != 0 && i != items.length - 1) {
+                          return const SizedBox.shrink();
+                        }
+
+                        return Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Text(
+                            shortLabel(items[i].date),
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: textLightGrey(context),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+                lineBarsData: [
+                  LineChartBarData(
+                    spots: spendSpots,
+                    isCurved: true,
+                    color: spendColor,
+                    barWidth: 2.2,
+                    dotData: const FlDotData(show: false),
+                    belowBarData: BarAreaData(
+                      show: false,
+                    ),
+                  ),
+                  LineChartBarData(
+                    spots: imprSpots,
+                    isCurved: true,
+                    color: imprColor,
+                    barWidth: 2.2,
+                    dotData: const FlDotData(show: false),
+                    belowBarData: BarAreaData(
+                      show: true,
+                      color: imprColor.withValues(alpha: 0.10),
+                    ),
+                  ),
+                  LineChartBarData(
+                    spots: clickSpots,
+                    isCurved: true,
+                    color: clickColor,
+                    barWidth: 2.2,
+                    dotData: const FlDotData(show: false),
+                    belowBarData: BarAreaData(
+                      show: false,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

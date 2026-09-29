@@ -1,0 +1,21 @@
+gfile:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/sqflite-2.4.1/lib/src/sqflite_darwin.dart‚m// ignore: implementation_imports
+import 'package:sqflite_platform_interface/src/sqflite_method_channel.dart';
+
+/// Native iOS
+const String methodDarwinCreateUnprotectedFolder =
+    'darwinCreateUnprotectedFolder';
+
+/// Darwin specific implementation.
+class SqfliteDarwin {
+  /// Creates an unprotected folder.
+  ///
+  /// See iOS runtime troubleshooting for more information.
+  static Future<void> createUnprotectedFolder(
+      String parent, String name) async {
+    await invokeMethod<Object?>(
+        methodDarwinCreateUnprotectedFolder, <String, Object?>{
+      'parent': parent,
+      'name': name,
+    });
+  }
+}

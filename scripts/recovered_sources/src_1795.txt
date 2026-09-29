@@ -1,0 +1,41 @@
+sfile:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/image-4.3.0/lib/src/command/draw/draw_circle_cmd.dartƒÊimport '../../color/channel.dart';
+import '../../color/color.dart';
+import '../../draw/draw_circle.dart';
+import '../command.dart';
+
+class DrawCircleCmd extends Command {
+  int x;
+  int y;
+  int radius;
+  Color color;
+  bool antialias;
+  Command? mask;
+  Channel maskChannel;
+
+  DrawCircleCmd(Command? input,
+      {required this.x,
+      required this.y,
+      required this.radius,
+      required this.color,
+      this.antialias = false,
+      this.mask,
+      this.maskChannel = Channel.luminance})
+      : super(input);
+
+  @override
+  Future<void> executeCommand() async {
+    final img = await input?.getImage();
+    final maskImg = await mask?.getImage();
+    outputImage = img != null
+        ? drawCircle(img,
+            x: x,
+            y: y,
+            radius: radius,
+            color: color,
+            antialias: antialias,
+            mask: maskImg,
+            maskChannel: maskChannel)
+        : null;
+  }
+}
+*

@@ -1,0 +1,22 @@
+import 'package:get/get.dart';
+
+class DynamicTranslations extends Translations {
+  final Map<String, Map<String, String>> _keys = {};
+
+  @override
+  Map<String, Map<String, String>> get keys => _keys;
+
+  void addTranslations(Map<String, Map<String, String>> map) {
+    map.forEach((lang, translations) {
+      final safeTranslations = Map<String, String>.from(translations);
+      if (_keys.containsKey(lang)) {
+        // _keys[lang] may have been set from an unmodifiable map.
+        final existing = Map<String, String>.from(_keys[lang] ?? const {});
+        existing.addAll(safeTranslations);
+        _keys[lang] = existing; // Update existing translations
+      } else {
+        _keys[lang] = safeTranslations; // Add new language
+      }
+    });
+  }
+}

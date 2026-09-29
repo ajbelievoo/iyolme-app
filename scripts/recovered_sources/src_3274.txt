@@ -1,0 +1,516 @@
+i¡bfile:///E:/flutterapp_pro/lib/screen/camera_edit_screen/text_story/story_text_view_controller.dartπòimport 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:get/get.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:shortzz/common/functions/generate_color.dart';
+import 'package:shortzz/common/manager/logger.dart';
+import 'package:shortzz/common/service/navigation/navigate_with_controller.dart';
+import 'package:shortzz/model/livestream/app_user.dart';
+import 'package:shortzz/model/user_model/user_model.dart';
+import 'package:shortzz/screen/camera_edit_screen/camera_edit_screen_controller.dart';
+import 'package:shortzz/screen/camera_edit_screen/text_story/widget/story_text_font_widget.dart';
+import 'package:shortzz/screen/camera_edit_screen/text_story/widget/text_editor_sheet.dart';
+import 'package:shortzz/utilities/app_res.dart';
+import 'package:shortzz/utilities/asset_res.dart';
+import 'package:shortzz/utilities/text_style_custom.dart';
+import 'package:shortzz/utilities/theme_res.dart';
+
+enum BgColorType { color, gradient }
+
+class StoryTextViewController extends GetxController {
+  List<StoryTextEditor> editorList = StoryTextEditor.values;
+  List<FontAlign> alignList = FontAlign.values;
+
+  RxList<GoogleFontFamily> fontFamilyList = <GoogleFontFamily>[].obs;
+  RxList<GoogleFontFamily> filteredFontFamilyList = <GoogleFontFamily>[].obs;
+
+  RxList<GoogleFontFamily> outerFontFamilyList = <GoogleFontFamily>[].obs;
+  Rx<Color> selectedColor = Rx(GenerateColor.instance.fontColor.first);
+  RxInt selectedIndex = 0.obs;
+
+  RxList<TextWidgetData> textWidgets = <TextWidgetData>[].obs;
+  RxList<ImageStickerData> imageStickers = <ImageStickerData>[].obs;
+
+  Rx<StoryTextEditor> selectorEditorIndex =
+      Rx<StoryTextEditor>(StoryTextEditor.font);
+  Rx<GoogleFontFamily?> selectedFontFamily = Rx<GoogleFontFamily?>(null);
+  GlobalKey previewContainer = GlobalKey();
+  Rx<FontAlign> selectedAlignment = Rx(FontAlign.center);
+  RxDouble selectedTextOpacity = 1.0.obs;
+  RxDouble selectedFontSize = AppRes.minFontSize.obs;
+
+  RxList<AppUser> mentionSuggestions = <AppUser>[].obs;
+  RxBool isMentionLoading = false.obs;
+  String _lastMentionQuery = '';
+  Timer? _mentionDebounce;
+
+  CameraEditScreenController cameraEditController;
+
+  StoryTextViewController(this.cameraEditController);
+
+  bool _didApplyPrefill = false;
+  @override
+  void onReady() {
+    super.onReady();
+    cameraEditController.onNewTexFieldAdd = () {
+      openTextEditor();
+    };
+    _addFontFamilyList();
+
+    if (!_didApplyPrefill) {
+      _didApplyPrefill = true;
+      _applyPrefillIfAny();
+    }
+  }
+
+  void _applyPrefillIfAny() {
+    final extra = cameraEditController.content.value.additionalContent;
+    if (extra == null || extra.isEmpty) return;
+
+    for (final raw in extra) {
+      final v = (raw).trim();
+      if (v.isEmpty) continue;
+      if (v.startsWith('__prefill_text__:')) {
+        final t = v.replaceFirst('__prefill_text__:', '').trim();
+        if (t.isEmpty) continue;
+        textWidgets.add(
+          TextWidgetData(
+            text: t,
+            top: 140,
+            left: 40,
+          ),
+        );
+      } else if (v.startsWith('__qrep__:')) {
+        textWidgets.add(
+          TextWidgetData(
+            text: v,
+            top: 220,
+            left: 40,
+          ),
+        );
+      }
+    }
+  }
+
+  @override
+  void onClose() {
+    super.onClose();
+    _mentionDebounce?.cancel();
+    releaseAllFonts();
+  }
+
+  void onEditorTextChanged(TextEditingController textController) {
+    final text = textController.text;
+    final cursor = textController.selection.baseOffset;
+    final q = _extractCurrentMentionQuery(text, cursor);
+    if (q == null || q.trim().isEmpty) {
+      _lastMentionQuery = '';
+      mentionSuggestions.clear();
+      return;
+    }
+
+    if (q == _lastMentionQuery) return;
+    _lastMentionQuery = q;
+
+    _mentionDebounce?.cancel();
+    _mentionDebounce = Timer(const Duration(milliseconds: 250), () {
+      _searchMentions(q);
+    });
+  }
+
+  String? _extractCurrentMentionQuery(String text, int cursor) {
+    if (cursor <= 0) return null;
+    final safeCursor = cursor.clamp(0, text.length);
+    final left = text.substring(0, safeCursor);
+    final atIndex = left.lastIndexOf('@');
+    if (atIndex < 0) return null;
+    if (atIndex > 0) {
+      final prev = left[atIndex - 1];
+      if (RegExp(r'[A-Za-z0-9_\.-]').hasMatch(prev)) {
+        return null;
+      }
+    }
+    final token = left.substring(atIndex + 1);
+    if (token.isEmpty) return '';
+    if (!RegExp(r'^[A-Za-z0-9_\.-]{0,30}$').hasMatch(token)) return null;
+    return token;
+  }
+
+  Future<void> _searchMentions(String query) async {
+    final q = query.trim();
+    if (q.isEmpty) {
+      mentionSuggestions.clear();
+      return;
+    }
+    isMentionLoading.value = true;
+    try {
+      final end = '$q\uf8ff';
+      final snap = await FirebaseFirestore.instance
+          .collection('app_users')
+          .orderBy('username')
+          .startAt([q])
+          .endAt([end])
+          .limit(12)
+          .get();
+      final list = snap.docs
+          .map((d) => AppUser.fromJson(d.data()))
+          .where((u) => (u.username ?? '').trim().isNotEmpty)
+          .toList();
+      mentionSuggestions.assignAll(list);
+    } catch (e) {
+      mentionSuggestions.clear();
+      Loggers.error('Mention search failed: $e');
+    } finally {
+      isMentionLoading.value = false;
+    }
+  }
+
+  void insertMentionFromSuggestion(
+    TextEditingController textController,
+    String username,
+  ) {
+    final u = username.trim();
+    if (u.isEmpty) return;
+
+    final text = textController.text;
+    final cursor = textController.selection.baseOffset;
+    final safeCursor = cursor.clamp(0, text.length);
+    final left = text.substring(0, safeCursor);
+    final atIndex = left.lastIndexOf('@');
+    if (atIndex < 0) return;
+
+    final before = text.substring(0, atIndex);
+    final after = text.substring(safeCursor);
+    final insert = '@$u ';
+    final nextText = '$before$insert$after';
+    final nextCursor =
+        (before.length + insert.length).clamp(0, nextText.length);
+
+    textController.value = TextEditingValue(
+      text: nextText,
+      selection: TextSelection.collapsed(offset: nextCursor),
+    );
+    mentionSuggestions.clear();
+  }
+
+  Future<void> openMentionProfile(String username) async {
+    final u = username.replaceAll('@', '').trim();
+    if (u.isEmpty) return;
+
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('app_users')
+          .where('username', isEqualTo: u)
+          .limit(1)
+          .get();
+      if (snap.docs.isEmpty) return;
+      final data = snap.docs.first.data();
+
+      final dynamic rawId = data['id'] ?? data['user_id'] ?? data['userId'];
+      final Map<String, dynamic> mapped = Map<String, dynamic>.from(data);
+      if (!mapped.containsKey('id') && rawId != null) {
+        mapped['id'] = rawId;
+      }
+
+      final user = User.fromJson(mapped);
+      await NavigationService.shared.openProfileScreen(user);
+    } catch (e) {
+      Loggers.error('Open mention profile failed: $e');
+    }
+  }
+
+  void _addFontFamilyList() {
+    final googleFontsMap = GoogleFonts.asMap();
+
+    // Load only the first 10 fonts to reduce memory usage
+    outerFontFamilyList.assignAll(googleFontsMap.entries
+        .take(10)
+        .map((font) => GoogleFontFamily(fontName: font.key))
+        .toList());
+
+    // Keep the full font list empty initially, load only when required
+    fontFamilyList.clear();
+    filteredFontFamilyList.clear();
+
+    Future.delayed(const Duration(seconds: 1), () {
+      loadAllFonts();
+    });
+  }
+
+  void loadAllFonts() {
+    if (fontFamilyList.isEmpty) {
+      final googleFontsMap = GoogleFonts.asMap();
+
+      // Convert map keys to a list to reduce object creation
+      final fontList = googleFontsMap.keys
+          .map((fontName) => GoogleFontFamily(fontName: fontName))
+          .toList(
+              growable:
+                  false); // Use non-growable list to reduce memory overhead
+      Loggers.success(fontList.length);
+      fontFamilyList.assignAll(fontList);
+      filteredFontFamilyList.assignAll(fontList);
+    }
+  }
+
+  void openTextEditor() {
+    resetTextEditorValues();
+    Get.bottomSheet<TextWidgetData>(
+      TextEditorSheet(data: TextWidgetData()),
+      isScrollControlled: true,
+      ignoreSafeArea: false,
+      enableDrag: false,
+      isDismissible: false,
+      backgroundColor: blackPure(Get.context!).withValues(alpha: .2),
+      barrierColor: blackPure(Get.context!).withValues(alpha: .2),
+    ).then((value) {
+      if (value != null && value.text.isNotEmpty) {
+        textWidgets.add(value);
+        cameraEditController.registerTextClipForWidget(value);
+      }
+    });
+  }
+
+  void resetTextEditorValues() {
+    selectedFontFamily.value = null;
+    selectedColor.value = Colors.white;
+    selectedAlignment.value = FontAlign.center;
+    selectedTextOpacity.value = 1.0;
+    selectorEditorIndex.value = StoryTextEditor.font;
+  }
+
+  // Helper to create updated text widget data
+  TextWidgetData createUpdatedData(TextWidgetData data, String updatedText) {
+    return TextWidgetData(
+      id: data.id,
+      text: updatedText,
+      top: data.top,
+      left: data.left,
+      fontScale: data.fontScale,
+      fontAngle: data.fontAngle,
+      fontSize: selectedFontSize.value,
+      opacity: selectedTextOpacity.value,
+      googleFontFamily: selectedFontFamily.value,
+      fontAlign: selectedAlignment.value,
+      fontColor: selectedColor.value,
+    );
+  }
+
+  void addImageSticker(String url) {
+    final u = url.trim();
+    if (u.isEmpty) return;
+    imageStickers.add(
+      ImageStickerData(
+        url: u,
+        top: 220,
+        left: 40,
+        scale: 1.0,
+        angle: 0.0,
+      ),
+    );
+  }
+
+  void updateImageSticker(int index, ImageStickerData updated) {
+    if (index < 0 || index >= imageStickers.length) return;
+    imageStickers[index] = updated;
+  }
+
+  void deleteImageSticker(int index) {
+    if (index < 0 || index >= imageStickers.length) return;
+    imageStickers.removeAt(index);
+  }
+
+  void updateTextWidget(int index, TextWidgetData updatedData) {
+    textWidgets[index] = updatedData;
+  }
+
+  void deleteTextWidget(int index) {
+    textWidgets.removeAt(index);
+  }
+
+  void addEmojiSticker(String emoji) {
+    final e = emoji.trim();
+    if (e.isEmpty) return;
+    textWidgets.add(
+      TextWidgetData(
+        text: e,
+        top: 200,
+        left: 40,
+        fontScale: 1.0,
+        fontAngle: 0.0,
+        fontSize: 56,
+        opacity: 1.0,
+        googleFontFamily: null,
+        fontAlign: FontAlign.center,
+        fontColor: Colors.white,
+      ),
+    );
+  }
+
+  void onChangeBg() {
+    selectedIndex.value =
+        (selectedIndex.value + 1) % GenerateColor.instance.gradientList.length;
+  }
+
+  onEditorTap(StoryTextEditor index) {
+    selectorEditorIndex.value = index;
+  }
+
+  void onFontFamilySelect(GoogleFontFamily fontFamily, int type) {
+    if (selectedFontFamily.value != fontFamily) {
+      selectedFontFamily.value = fontFamily;
+    } else {
+      selectedFontFamily.value = null;
+    }
+
+    if (type == 1) {
+      outerFontFamilyList
+        ..removeWhere((e) => e.fontName == fontFamily.fontName)
+        ..insert(0, fontFamily);
+    }
+  }
+
+  onSearchFontFamily(String value) {
+    if (value.isEmpty) {
+      // If query is empty, restore the original list
+      filteredFontFamilyList.assignAll(fontFamilyList);
+    } else {
+      // Filter fontFamilyList based on the query
+      filteredFontFamilyList.assignAll(fontFamilyList
+          .where((font) =>
+              font.fontName.toLowerCase().contains((value).toLowerCase()))
+          .toList());
+    }
+  }
+
+  void openFontSheet() async {
+    Get.bottomSheet(const GoogleFontFamilySheet(),
+            isScrollControlled: true, ignoreSafeArea: false)
+        .then((value) {
+      onSearchFontFamily('');
+    });
+  }
+
+  // Call this when fonts are no longer needed to free memory
+  void releaseAllFonts() {
+    Loggers.success('Releasing fonts');
+    for (var font in fontFamilyList) {
+      font.clearCache(); // Clear cached styles
+    }
+    fontFamilyList.clear(); // Remove font list from memory
+    filteredFontFamilyList.clear();
+  }
+}
+
+class ImageStickerData {
+  final String url;
+  final double top;
+  final double left;
+  final double scale;
+  final double angle;
+
+  const ImageStickerData({
+    required this.url,
+    required this.top,
+    required this.left,
+    required this.scale,
+    required this.angle,
+  });
+
+  ImageStickerData copyWith({
+    String? url,
+    double? top,
+    double? left,
+    double? scale,
+    double? angle,
+  }) {
+    return ImageStickerData(
+      url: url ?? this.url,
+      top: top ?? this.top,
+      left: left ?? this.left,
+      scale: scale ?? this.scale,
+      angle: angle ?? this.angle,
+    );
+  }
+}
+
+class TextEditor {
+  String image;
+  String title;
+
+  TextEditor({required this.image, required this.title});
+}
+
+class GoogleFontFamily {
+  final String fontName;
+  TextStyle? _style; // Lazy-loaded style
+
+  GoogleFontFamily({required this.fontName});
+
+  // Lazy getter to fetch style only when needed
+  TextStyle get style {
+    _style ??= GoogleFonts.getFont(fontName); // Load only when accessed
+    return _style ?? TextStyleCustom.outFitRegular400();
+  }
+
+  // Release memory manually
+  void clearCache() {
+    _style = null; // Remove stored TextStyle
+  }
+}
+
+enum FontAlign {
+  start,
+  center,
+  end,
+  justify;
+
+  static const Map<FontAlign, IconData> _iconMap = {
+    FontAlign.start: Icons.format_align_left_rounded,
+    FontAlign.center: Icons.format_align_center_rounded,
+    FontAlign.end: Icons.format_align_right_rounded,
+    FontAlign.justify: Icons.format_align_justify_rounded,
+  };
+
+  static const Map<FontAlign, TextAlign> _alignMap = {
+    FontAlign.start: TextAlign.left,
+    FontAlign.center: TextAlign.center,
+    FontAlign.end: TextAlign.end,
+    FontAlign.justify: TextAlign.justify,
+  };
+
+  IconData get icon => _iconMap[this]!;
+
+  TextAlign get align => _alignMap[this]!;
+}
+
+enum StoryTextEditor {
+  font,
+  style,
+  color,
+  opacity;
+  // textSize;
+
+  static const Map<StoryTextEditor, String> imageMap = {
+    StoryTextEditor.font: AssetRes.icTextFont,
+    StoryTextEditor.style: AssetRes.icTextStyle,
+    StoryTextEditor.color: AssetRes.icTextColor,
+    StoryTextEditor.opacity: AssetRes.icTextOpacity,
+    // StoryTextEditor.textSize: AssetRes.icTextSize,
+  };
+
+  static const Map<StoryTextEditor, String> titleMap = {
+    StoryTextEditor.font: 'Font',
+    StoryTextEditor.style: 'Style',
+    StoryTextEditor.color: 'Color',
+    StoryTextEditor.opacity: 'Opacity',
+    // StoryTextEditor.textSize: 'Size',
+  };
+
+  String get image => imageMap[this]!;
+
+  String get title => titleMap[this]!;
+}
+Ç

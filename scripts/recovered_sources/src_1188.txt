@@ -1,0 +1,76 @@
+„0‚ª€¢file:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_cache_manager-3.4.1/lib/src/storage/cache_info_repositories/non_storing_object_provider.dart…¹import 'package:flutter_cache_manager/src/storage/cache_info_repositories/cache_info_repository.dart';
+import 'package:flutter_cache_manager/src/storage/cache_object.dart';
+
+class NonStoringObjectProvider implements CacheInfoRepository {
+  @override
+  Future<bool> close() async {
+    return true;
+  }
+
+  @override
+  Future<int> delete(int id) {
+    return Future.value(1);
+  }
+
+  @override
+  Future<int> deleteAll(Iterable<int> ids) {
+    return Future.value(ids.length);
+  }
+
+  @override
+  Future<CacheObject?> get(String url) {
+    return Future.value();
+  }
+
+  @override
+  Future<List<CacheObject>> getAllObjects() {
+    return Future.value([]);
+  }
+
+  @override
+  Future<List<CacheObject>> getObjectsOverCapacity(int capacity) {
+    return Future.value([]);
+  }
+
+  @override
+  Future<List<CacheObject>> getOldObjects(Duration maxAge) {
+    return Future.value([]);
+  }
+
+  @override
+  Future<CacheObject> insert(
+    CacheObject cacheObject, {
+    bool setTouchedToNow = true,
+  }) {
+    return Future.value(cacheObject);
+  }
+
+  @override
+  Future<bool> open() async {
+    return true;
+  }
+
+  @override
+  Future<int> update(
+    CacheObject cacheObject, {
+    bool setTouchedToNow = true,
+  }) {
+    return Future.value(0);
+  }
+
+  @override
+  Future updateOrInsert(CacheObject cacheObject) {
+    return Future.value();
+  }
+
+  @override
+  Future<void> deleteDataFile() async {
+    return;
+  }
+
+  @override
+  Future<bool> exists() async {
+    return false;
+  }
+}
+M

@@ -1,0 +1,120 @@
+# Reels Video Delivery – Final Backend Requirements (HLS Primary)
+
+## Overview
+- Reels feed me HLS (.m3u8) primary source hoga.
+- MP4 sirf fallback ke liye rahega.
+- Goal: Instagram-style smooth playback.
+
+## API Response Format (Mandatory)
+```json
+{
+"video": "https://cdn.hitune.in/uploads/REAL_FILE.mp4",
+"videoHls": "https://cdn.hitune.in/videos/POST_ID/master.m3u8"
+}
+```
+
+## Rules
+- videoHls → Mandatory primary playback URL (master.m3u8)
+- video → Real MP4 URL (fallback)
+- No fake paths
+- URL must return 200 OK
+
+## HLS Encode (Mandatory)
+- Upload ke turant baad multi-bitrate HLS generate hona chahiye:
+- 360p, 480p, 720p, 1080p playlists + master.m3u8
+- Path layout:
+```
+/videos/{video_id}/
+├── 360p.m3u8
+├── 480p.m3u8
+├── 720p.m3u8
+├── 1080p.m3u8
+└── master.m3u8
+```
+
+## MP4 Delivery Requirements
+- Content-Type: video/mp4
+- Accept-Ranges: bytes
+- Cache-Control: public, max-age=31536000, immutable
+
+## Faststart Requirement
+MP4 must be encoded with faststart enabled:
+```bash
+ffmpeg -i input.mp4 -movflags +faststart -acodec copy -vcodec copy output.mp4
+```
+
+## CDN / Cloudflare Requirements
+- HTTP/2 enabled
+- Range requests allowed
+- Cache Everything (for MP4 paths)
+- Respect Origin: OFF
+- Edge TTL: Long (30 days or more)
+- CDN should cache MP4 aggressively
+- HLS objects (m3u8/ts) publicly accessible hone chahiye (404 → Public Access enable karo)
+
+## Validation Checklist
+Before release:
+- HLS master.m3u8 returns 200 OK
+- MP4 URL returns 200 OK
+- Range request returns 206 Partial Content
+- Correct headers present
+- CDN caching working
+- App primary playback = HLS; MP4 only as fallback
+- If 404 dikh raha ho, ensure bucket/object Public Access enabled on CDN
+
+Test with:
+```bash
+curl -I https://cdn.hitune.in/videos/POST_ID/master.m3u8
+curl -I https://cdn.hitune.in/uploads/FILE.mp4
+curl -I -H "Range: bytes=0-1000" https://cdn.hitune.in/uploads/FILE.mp4
+```
+
+## Playback Logic
+- videoHls available → ExoPlayer + HLS (primary)
+- videoHls missing → Fallback to MP4
+
+## Simple Truth
+- Smooth reels playback requires:
+HLS (multi-bitrate) + CDN + MP4 fallback + Range + Faststart + Cache
+
+## Final Note
+- No guess-based changes.
+- Review full flow: upload → storage → CDN → API → app.
+- Ensure API always returns correct public HLS + MP4 fallback URL.
+
+## Core API Endpoints & Payloads
+- Feed (Discover): POST /api/fetchPostsDiscover
+- Headers: authtoken
+- Body: types, limit, last_item_id (optional)
+- MP4 Stream (local uploads only): GET /api/media/stream?path=uploads/FILE.mp4
+- Supports Range (206) + Accept-Ranges: bytes
+- R2 objects return full CDN URL; stream proxy not used
+
+### Sample Request
+```bash
+curl -X POST 'https://iyolme.com/api/fetchPostsDiscover' \
+-H 'authtoken: <USER_TOKEN>' \
+    -d 'types=3&limit=20'
+    ```
+
+    ### Response Keys (Flutter must use these)
+    ```json
+    {
+    "video": "https://cdn.hitune.in/videos/post_493/progressive.mp4",
+    "videoHls": "https://cdn.hitune.in/videos/post_493/master.m3u8",
+    "post_image": "https://cdn.hitune.in/.../thumb.jpg"
+    }
+    ```
+
+    ## Flutter Player Guide (Instant Play)
+    - Primary: HLS master via ExoPlayer
+    - Fallback: progressive MP4
+    - Buffer: minBufferMs ≈ 1500–2000 ms; segment ≈ 2s
+    - Prefetch: current + next 2 items (master.m3u8 + first segment)
+    - Error: HLS failure → immediate MP4 switch; else placeholder + retry
+
+    ## Troubleshooting “Black Reel”
+    - HLS path mismatch → use exact videos/post_{id}/master.m3u8
+    - Object not public → enable public access on CDN bucket
+    - MP4 not faststart/Range → ensure headers + movflags +faststart
+    - Using http instead of https → always https CDN

@@ -1,0 +1,247 @@
+cþ„’Pfile:///E:/flutterapp_pro/lib/common/manager/story_view/widgets/story_image.dart—£import 'dart:async';
+import 'dart:ui' as ui;
+
+import 'package:flutter/material.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+
+import '../controller/story_controller.dart';
+import '../utils.dart';
+
+/// Utility to load image (gif, png, jpg, etc) media just once. Resource is
+/// cached to disk with default configurations of [DefaultCacheManager].
+class ImageLoader {
+  ui.Codec? frames;
+
+  String url;
+
+  Map<String, dynamic>? requestHeaders;
+
+  LoadState state = LoadState.loading; // by default
+
+  ImageLoader(this.url, {this.requestHeaders});
+
+  /// Load image from disk cache first, if not found then load from network.
+  /// `onComplete` is called when [imageBytes] become available.
+  void loadImage(VoidCallback onComplete) {
+    if (frames != null) {
+      state = LoadState.success;
+      onComplete();
+      return;
+    }
+
+    // Setup timeout to prevent infinite loading (8 seconds)
+    var isCompleted = false;
+    Timer? timeoutTimer;
+    void markComplete() {
+      if (!isCompleted) {
+        isCompleted = true;
+        timeoutTimer?.cancel();
+        onComplete();
+      }
+    }
+    
+    timeoutTimer = Timer(const Duration(seconds: 8), () {
+      if (!isCompleted && frames == null) {
+        state = LoadState.failure;
+        markComplete();
+      }
+    });
+
+    final fileStream =
+        DefaultCacheManager().getFileStream(url, headers: requestHeaders as Map<String, String>?);
+
+    fileStream.listen(
+      (fileResponse) {
+        if (fileResponse is! FileInfo) return;
+        if (frames != null || isCompleted) {
+          return;
+        }
+        try {
+          final imageBytes = fileResponse.file.readAsBytesSync();
+          state = LoadState.success;
+          ui.instantiateImageCodec(imageBytes).then((codec) {
+            frames = codec;
+            markComplete();
+          }, onError: (error) {
+            state = LoadState.failure;
+            markComplete();
+          });
+        } catch (e) {
+          state = LoadState.failure;
+          markComplete();
+        }
+      },
+      onError: (error) {
+        if (!isCompleted) {
+          state = LoadState.failure;
+          markComplete();
+        }
+      },
+      onDone: () {
+        if (!isCompleted && frames == null && state == LoadState.loading) {
+          state = LoadState.failure;
+          markComplete();
+        }
+      },
+    );
+  }
+}
+
+/// Widget to display animated gifs or still images. Shows a loader while image
+/// is being loaded. Listens to playback states from [controller] to pause and
+/// forward animated media.
+class StoryImage extends StatefulWidget {
+  final ImageLoader imageLoader;
+
+  final BoxFit? fit;
+
+  final StoryController? controller;
+
+  StoryImage(
+    this.imageLoader, {
+    Key? key,
+    this.controller,
+    this.fit,
+  }) : super(key: key ?? UniqueKey());
+
+  /// Use this shorthand to fetch images/gifs from the provided [url]
+  factory StoryImage.url(
+    String url, {
+    StoryController? controller,
+    Map<String, dynamic>? requestHeaders,
+    BoxFit fit = BoxFit.fitWidth,
+    Key? key,
+  }) {
+    return StoryImage(
+        ImageLoader(
+          url,
+          requestHeaders: requestHeaders,
+        ),
+        controller: controller,
+        fit: fit,
+        key: key);
+  }
+
+  @override
+  State<StatefulWidget> createState() => StoryImageState();
+}
+
+class StoryImageState extends State<StoryImage> {
+  ui.Image? currentFrame;
+
+  Timer? _timer;
+
+  StreamSubscription<PlaybackState>? _streamSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+
+    widget.controller?.setMediaLoading(true);
+
+    if (widget.controller != null) {
+      _streamSubscription = widget.controller!.playbackNotifier.listen((playbackState) {
+        // for the case of gifs we need to pause/play
+        if (widget.imageLoader.frames == null) {
+          return;
+        }
+
+        if (playbackState == PlaybackState.pause) {
+          _timer?.cancel();
+        } else {
+          forward();
+        }
+      });
+    }
+
+    widget.controller?.pause();
+
+    widget.imageLoader.loadImage(() async {
+      if (mounted) {
+        if (widget.imageLoader.state == LoadState.success) {
+          widget.controller?.setMediaLoading(false);
+          widget.controller?.play();
+          forward();
+        } else {
+          widget.controller?.setMediaLoading(false);
+          // refresh to show error
+          setState(() {});
+        }
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _streamSubscription?.cancel();
+
+    super.dispose();
+  }
+
+  @override
+  void setState(fn) {
+    if (mounted) {
+      super.setState(fn);
+    }
+  }
+
+  void forward() async {
+    _timer?.cancel();
+
+    if (widget.controller != null &&
+        widget.controller!.playbackNotifier.stream.value == PlaybackState.pause) {
+      return;
+    }
+
+    final nextFrame = await widget.imageLoader.frames!.getNextFrame();
+
+    currentFrame = nextFrame.image;
+
+    if (nextFrame.duration > const Duration(milliseconds: 0)) {
+      _timer = Timer(nextFrame.duration, forward);
+    }
+
+    setState(() {});
+  }
+
+  Widget getContentView() {
+    switch (widget.imageLoader.state) {
+      case LoadState.success:
+        return RawImage(
+          image: currentFrame,
+          fit:
+              (currentFrame?.width ?? 0) >= (currentFrame?.height ?? 0) ? widget.fit : BoxFit.cover,
+        );
+      case LoadState.failure:
+        return const Center(
+            child: Text(
+          "Image failed to load.",
+          style: TextStyle(
+            color: Colors.white,
+          ),
+        ));
+      default:
+        return const Center(
+          child: SizedBox(
+            width: 70,
+            height: 70,
+            child: CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+              strokeWidth: 3,
+            ),
+          ),
+        );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      height: double.infinity,
+      child: getContentView(),
+    );
+  }
+}
+€ø

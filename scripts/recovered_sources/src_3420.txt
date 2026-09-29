@@ -1,0 +1,132 @@
+Sfile:///E:/flutterapp_pro/lib/screen/profile_screen/widget/profile_drafts_page.dartŽøimport 'dart:io';
+
+import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:shortzz/common/service/draft_service.dart';
+import 'package:shortzz/screen/camera_edit_screen/camera_edit_screen.dart';
+import 'package:shortzz/utilities/asset_res.dart';
+import 'package:shortzz/utilities/theme_res.dart';
+
+class ProfileDraftsPage extends StatefulWidget {
+  const ProfileDraftsPage({super.key});
+
+  @override
+  State<ProfileDraftsPage> createState() => _ProfileDraftsPageState();
+}
+
+class _ProfileDraftsPageState extends State<ProfileDraftsPage> {
+  List<DraftModel> _drafts = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshDrafts();
+  }
+
+  void _refreshDrafts() {
+    setState(() {
+      _drafts = DraftService.instance.getDrafts();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_drafts.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.drafts_outlined,
+                size: 60, color: textLightGrey(context)),
+            const SizedBox(height: 10),
+            Text(
+              'No drafts yet',
+              style: TextStyle(
+                color: textLightGrey(context),
+                fontSize: 16,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return GridView.builder(
+      padding: const EdgeInsets.all(2),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 3,
+        crossAxisSpacing: 2,
+        mainAxisSpacing: 2,
+        childAspectRatio: 0.7,
+      ),
+      itemCount: _drafts.length,
+      itemBuilder: (context, index) {
+        final draft = _drafts[index];
+        return GestureDetector(
+          onTap: () => _restoreDraft(draft),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              if (draft.thumbnailPath != null)
+                Image.file(
+                  File(draft.thumbnailPath!),
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => Container(color: Colors.grey),
+                )
+              else
+                Container(color: Colors.grey),
+
+              // Type indicator (Reel)
+              Positioned(
+                top: 5,
+                right: 5,
+                child: Image.asset(
+                  AssetRes.icReel,
+                  width: 20,
+                  height: 20,
+                  color: Colors.white,
+                ),
+              ),
+
+              // Delete button
+              Positioned(
+                bottom: 5,
+                right: 5,
+                child: GestureDetector(
+                  onTap: () async {
+                    await DraftService.instance.deleteDraft(draft.id);
+                    _refreshDrafts();
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      color: Colors.black54,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Icon(
+                      Icons.delete_outline,
+                      color: Colors.white,
+                      size: 16,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _restoreDraft(DraftModel draft) {
+    // Convert DraftModel back to PostStoryContent
+    final content = draft.toContent();
+
+    // Navigate to CameraEditScreen to allow editing (trim, music, filters)
+    // This provides a better UX than jumping straight to CreateFeedScreen
+    Get.to(() => CameraEditScreen(
+          content: content,
+        ))?.then((_) => _refreshDrafts()); // Refresh on return
+  }
+}
+€…

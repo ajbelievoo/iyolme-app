@@ -1,0 +1,46 @@
+class StickersModel {
+  bool? status;
+  String? message;
+  List<StickerItem>? data;
+
+  StickersModel({this.status, this.message, this.data});
+
+  factory StickersModel.fromJson(Map<String, dynamic> json) {
+    final raw = json['data'];
+    return StickersModel(
+      status: json['status'] == true,
+      message: json['message']?.toString(),
+      data: raw is List
+          ? raw
+              .whereType<Map>()
+              .map((e) => StickerItem.fromJson(e.cast<String, dynamic>()))
+              .toList()
+          : <StickerItem>[],
+    );
+  }
+}
+
+class StickerItem {
+  int? id;
+  String? image;
+  String? imageUrl;
+  int? isPremium;
+
+  StickerItem({this.id, this.image, this.imageUrl, this.isPremium});
+
+  factory StickerItem.fromJson(Map<String, dynamic> json) {
+    return StickerItem(
+      id: _toInt(json['id']),
+      image: json['image']?.toString(),
+      imageUrl: (json['image_url'] ?? json['imageUrl'])?.toString(),
+      isPremium: _toInt(json['is_premium'] ?? json['isPremium']),
+    );
+  }
+}
+
+int _toInt(dynamic v) {
+  if (v == null) return 0;
+  if (v is int) return v;
+  if (v is num) return v.toInt();
+  return int.tryParse('$v') ?? 0;
+}

@@ -1,0 +1,107 @@
+Jfile:///E:/flutterapp_pro/lib/common/service/api/platform_ads_service.dartŽŒimport 'package:shortzz/common/service/api/api_service.dart';
+import 'package:shortzz/common/service/utils/params.dart';
+import 'package:shortzz/common/service/utils/web_service.dart';
+import 'package:shortzz/common/manager/logger.dart';
+import 'package:shortzz/model/general/status_model.dart';
+import 'package:shortzz/model/platform_ads/platform_ads_model.dart';
+
+class PlatformAdsService {
+  PlatformAdsService._();
+
+  static final PlatformAdsService instance = PlatformAdsService._();
+
+  Future<List<PlatformAd>> fetchPlatformAds({
+    required String placement,
+    String? countryCode,
+  }) async {
+    final params = <String, dynamic>{
+      Params.placement: placement,
+      if (countryCode != null) 'country_code': countryCode,
+    };
+
+    try {
+      PlatformAdsResponse model = await ApiService.instance.call(
+        url: WebService.platformAds.fetchPlatformAds,
+        fromJson: PlatformAdsResponse.fromJson,
+        param: params,
+      );
+      return model.data ?? [];
+    } on Exception catch (e) {
+      final errorString = e.toString().toLowerCase();
+      // Handle 404 - endpoint not available on backend
+      if (errorString.contains('404') || errorString.contains('not found')) {
+        Loggers.warning('Platform ads endpoint not available (404), returning empty list');
+        return <PlatformAd>[];
+      }
+      // Backward-compatible fallback (some backends expose fetch as GET)
+      try {
+        final Map<String, dynamic> json = await ApiService.instance.get<Map<String, dynamic>>(
+          url: WebService.platformAds.fetchPlatformAds,
+          param: params,
+        );
+        return PlatformAdsResponse.fromJson(json).data ?? <PlatformAd>[];
+      } on Exception catch (e2) {
+        final errorString2 = e2.toString().toLowerCase();
+        if (errorString2.contains('404') || errorString2.contains('not found')) {
+          Loggers.warning('Platform ads GET fallback also 404, returning empty list');
+          return <PlatformAd>[];
+        }
+        rethrow;
+      }
+    }
+  }
+
+  Future<StatusModel> trackAdEvent({
+    int? adId,
+    String? event,
+    String? placement,
+    String? action,
+    String? metadataJson,
+  }) async {
+    StatusModel model = await ApiService.instance.call(
+      url: WebService.platformAds.trackAdEvent,
+      fromJson: StatusModel.fromJson,
+      param: {
+        if (adId != null) Params.adId: adId,
+        if (event != null) Params.event: event,
+        if (placement != null) Params.placement: placement,
+        if (action != null) Params.action: action,
+        if (metadataJson != null) Params.metadataJson: metadataJson,
+      },
+    );
+    return model;
+  }
+
+  Future<StatusModel> createAdRequest({
+    required String placement,
+    required String title,
+    String? description,
+    required String mediaPath,
+    required String mediaType,
+    required String billing,
+    required double budget,
+    int? durationHours,
+    String? ctaUrl,
+    String? metadataJson,
+  }) async {
+    StatusModel model = await ApiService.instance.call(
+      url: WebService.platformAds.createAdRequest,
+      fromJson: StatusModel.fromJson,
+      param: {
+        Params.placement: placement,
+        Params.title: title,
+        if ((description ?? '').isNotEmpty) Params.descriptionText: description,
+        Params.mediaPath: mediaPath,
+        Params.mediaType: mediaType,
+        Params.billing: billing,
+        Params.budget: budget,
+        if (durationHours != null) Params.durationHours: durationHours,
+        if ((ctaUrl ?? '').isNotEmpty) Params.ctaUrl: ctaUrl,
+        if (metadataJson != null) Params.metadataJson: metadataJson,
+        if (metadataJson != null) Params.metadata: metadataJson,
+      },
+    );
+    return model;
+  }
+}
+l

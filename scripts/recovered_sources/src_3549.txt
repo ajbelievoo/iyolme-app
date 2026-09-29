@@ -1,0 +1,33 @@
+†½ˆ7‡‚kfile:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/sqflite_common-2.5.6/lib/src/sql_command.dart‚./// Sql command type.
+enum SqliteSqlCommandType {
+  /// such CREATE TABLE, DROP_INDEX, pragma
+  execute,
+
+  /// Insert statement,
+  insert,
+
+  /// Update statement.
+  update,
+
+  /// Delete statement.
+  delete,
+
+  /// Query statement (SELECTÃ 
+  query,
+}
+
+/// Sql command. internal only.
+class SqfliteSqlCommand {
+  /// The command type.
+  final SqliteSqlCommandType type;
+
+  /// The sql statement.
+  final String sql;
+
+  /// The sql arguments.
+  final List<Object?>? arguments;
+
+  /// Sql command.
+  SqfliteSqlCommand(this.type, this.sql, this.arguments);
+}
+"

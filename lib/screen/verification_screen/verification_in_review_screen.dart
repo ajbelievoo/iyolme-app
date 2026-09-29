@@ -1,0 +1,190 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:shortzz/common/manager/session_manager.dart';
+import 'package:shortzz/common/service/api/user_service.dart';
+import 'package:shortzz/model/verification/verification_status_model.dart';
+import 'package:shortzz/screen/subscription_screen/subscription_screen.dart';
+import 'package:shortzz/screen/verification_screen/verification_congrats_screen.dart';
+import 'package:shortzz/screen/verification_screen/verification_rejected_screen.dart';
+import 'package:shortzz/utilities/text_style_custom.dart';
+import 'package:shortzz/utilities/theme_res.dart';
+
+class VerificationInReviewScreen extends StatefulWidget {
+  final int? requestId;
+  final String? planName;
+
+  const VerificationInReviewScreen({
+    super.key,
+    this.requestId,
+    this.planName,
+  });
+
+  @override
+  State<VerificationInReviewScreen> createState() => _VerificationInReviewScreenState();
+}
+
+class _VerificationInReviewScreenState extends State<VerificationInReviewScreen> {
+  Timer? _timer;
+  bool _loading = false;
+  VerificationStatusData? _data;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetch();
+    _timer = Timer.periodic(const Duration(seconds: 6), (_) => _fetch());
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _fetch() async {
+    if (_loading) return;
+    _loading = true;
+    try {
+      final res = await UserService.instance.fetchVerificationStatus(requestId: widget.requestId);
+      final d = res.data;
+      if (!mounted) return;
+      setState(() {
+        _data = d;
+      });
+
+      // Persist state for resume-after-restart.
+      if (d != null) {
+        final code = d.isApproved ? 1 : (d.isRejected ? 2 : (d.isInReview ? 0 : -1));
+        SessionManager.instance.setVerificationState(
+          status: code,
+          requestId: d.requestId ?? widget.requestId,
+        );
+      }
+
+      if (d != null && d.isApproved) {
+        _timer?.cancel();
+        final current = SessionManager.instance.getUser();
+        if (current != null && (current.isVerify ?? 0) != 1) {
+          SessionManager.instance.setUser(current.copyWith(isVerify: 1));
+        }
+        SessionManager.instance.setVerificationState(status: 1, requestId: d.requestId ?? widget.requestId);
+        Get.offAll(() => VerificationCongratsScreen(planName: widget.planName));
+      }
+
+      if (d != null && d.isRejected) {
+        _timer?.cancel();
+        SessionManager.instance.setVerificationState(status: 2, requestId: d.requestId ?? widget.requestId);
+        Get.offAll(
+          () => VerificationRejectedScreen(
+            reason: d.rejectionReason,
+            planName: widget.planName,
+          ),
+        );
+      }
+    } catch (_) {
+    } finally {
+      _loading = false;
+    }
+  }
+
+  void _goBackToPlans() {
+    Get.offAll(() => const SubscriptionScreen(forceShowPlans: true));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final status = (_data?.verificationStatus ?? 'Pending').toString();
+
+    return Scaffold(
+      backgroundColor: scaffoldBackgroundColor(context),
+      appBar: AppBar(
+        backgroundColor: scaffoldBackgroundColor(context),
+        elevation: 0,
+        leading: IconButton(
+          icon: Icon(Icons.close, color: textDarkGrey(context)),
+          onPressed: _goBackToPlans,
+        ),
+        title: Text(
+          'In Review',
+          style: TextStyleCustom.unboundedMedium500(color: textDarkGrey(context)),
+        ),
+      ),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Your verification request has been submitted.',
+                style: TextStyleCustom.unboundedMedium500(
+                  fontSize: 18,
+                  color: textDarkGrey(context),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'We will notify you once it is approved.',
+                style: TextStyleCustom.outFitRegular400(color: textLightGrey(context)),
+              ),
+              const SizedBox(height: 18),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: bgLightGrey(context),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: textLightGrey(context).withValues(alpha: .15)),
+                ),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      height: 18,
+                      width: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.5,
+                        valueColor: AlwaysStoppedAnimation<Color>(themeAccentSolid(context)),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        'Status: $status',
+                        style: TextStyleCustom.outFitMedium500(color: textDarkGrey(context)),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: _fetch,
+                      child: Text(
+                        'Refresh',
+                        style: TextStyleCustom.outFitMedium500(color: themeAccentSolid(context)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Spacer(),
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: ElevatedButton(
+                  onPressed: _goBackToPlans,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: themeAccentSolid(context),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: Text(
+                    'Back to plans',
+                    style: TextStyleCustom.outFitMedium500(color: whitePure(context)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}

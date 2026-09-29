@@ -1,0 +1,997 @@
+„3ï»¿import 'dart:io';
+
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:shortzz/common/controller/base_controller.dart';
+import 'package:shortzz/common/controller/firebase_firestore_controller.dart';
+import 'package:flutter/material.dart';
+import 'package:shortzz/common/manager/session_manager.dart';
+import 'package:shortzz/common/manager/logger.dart';
+import 'package:shortzz/common/service/api/api_service.dart';
+import 'package:shortzz/common/service/utils/params.dart';
+import 'package:shortzz/common/service/utils/web_service.dart';
+import 'package:shortzz/utilities/const_res.dart';
+import 'package:shortzz/model/general/status_model.dart';
+import 'package:shortzz/model/user_model/block_user_model.dart';
+import 'package:shortzz/model/user_model/follower_model.dart';
+import 'package:shortzz/model/user_model/following_model.dart';
+import 'package:shortzz/model/user_model/links_model.dart';
+import 'package:shortzz/model/user_model/user_model.dart';
+import 'package:shortzz/model/user_model/users_model.dart';
+import 'package:shortzz/model/professional/professional_stats_model.dart';
+import 'package:shortzz/model/professional/daily_tasks_model.dart';
+import 'package:shortzz/model/professional/leaderboard_model.dart';
+import 'package:shortzz/model/subscription/subscription_plans_model.dart';
+import 'package:shortzz/model/subscription/subscription_status_model.dart';
+import 'package:shortzz/model/subscription/subscription_verify_model.dart';
+import 'package:shortzz/model/chat_theme/chat_themes_model.dart';
+import 'package:shortzz/model/sticker/stickers_model.dart';
+import 'package:shortzz/model/verification/verification_status_model.dart';
+import 'package:shortzz/model/verification/verification_submit_model.dart';
+import 'package:shortzz/model/gift/received_gifts_model.dart';
+import 'package:shortzz/screen/edit_profile_screen/widget/add_edit_link_sheet.dart';
+import 'package:shortzz/utilities/app_res.dart';
+
+enum LoginMethod {
+  email,
+  google,
+  apple;
+
+  String title() {
+    switch (this) {
+      case LoginMethod.email:
+        return 'email';
+      case LoginMethod.google:
+        return 'google';
+      case LoginMethod.apple:
+        return 'apple';
+    }
+  }
+}
+
+class _CachedUserDetails {
+  final User? user;
+  final int fetchedAtMs;
+  const _CachedUserDetails(this.user, this.fetchedAtMs);
+}
+
+class UserService {
+  UserService._();
+
+  static final UserService instance = UserService._();
+
+  static final Map<int, Future<User?>> _fetchUserDetailsInFlight =
+      <int, Future<User?>>{};
+  static final Map<int, _CachedUserDetails> _fetchUserDetailsCache =
+      <int, _CachedUserDetails>{};
+  static const int _fetchUserDetailsCacheMs = 5 * 60 * 1000;
+
+  Future<void> _syncDeviceTokenAfterLogin() async {
+    try {
+      final token = await FirebaseMessaging.instance.getToken();
+      if (token == null || token.isEmpty) return;
+      Loggers.info(
+          '[FCM_SYNC_AFTER_LOGIN] tokenLen=${token.length} authTokenEmpty=${(SessionManager.instance.getAuthToken()).contains('EMPTY')}');
+      final updated = await updateUserDetails(
+        deviceToken: token,
+        device: Platform.isAndroid ? 0 : 1,
+      );
+      if (updated?.deviceToken == token) {
+        Loggers.success('âœ… Device token synced after login');
+      } else {
+        Loggers.error(
+            '[FCM_SYNC_AFTER_LOGIN] backend did not echo token. userNull=${updated == null} backendToken=${updated?.deviceToken}');
+      }
+    } catch (e) {
+      Loggers.error('Device token sync after login failed: $e');
+    }
+  }
+
+  Future<ChatThemesModel> getChatThemes() async {
+    try {
+      final ChatThemesModel response = await ApiService.instance
+          .get(
+            url: WebService.user.chatThemes,
+            fromJson: ChatThemesModel.fromJson,
+          )
+          .timeout(const Duration(seconds: 12));
+      return response;
+    } catch (e) {
+      Loggers.error(
+          '[ChatThemes] fetch failed url=${WebService.user.chatThemes} err=${e.toString()}');
+      return ChatThemesModel(
+          status: false, message: '', data: <ChatThemeItem>[]);
+    }
+  }
+
+  Future<StatusModel> setChatTheme({required int themeId}) async {
+    final StatusModel response = await ApiService.instance.call(
+      url: WebService.user.setChatTheme,
+      param: {
+        Params.themeId: themeId,
+      },
+      fromJson: StatusModel.fromJson,
+    );
+    return response;
+  }
+
+  Future<User?> logInUser({
+    String? fullName,
+    required String identity,
+    String? deviceToken,
+    required LoginMethod loginMethod,
+    String? referralCode,
+  }) async {
+    UserModel model = await ApiService.instance.call(
+        url: WebService.user.loginInUser,
+        param: {
+          Params.fullname: fullName,
+          Params.identity: identity,
+          Params.deviceToken: deviceToken,
+          Params.device: Platform.isAndroid ? 0 : 1,
+          Params.loginMethod: loginMethod.title(),
+          if (referralCode != null && referralCode.trim().isNotEmpty)
+            Params.referralCode: referralCode.trim(),
+        },
+        fromJson: UserModel.fromJson);
+
+    if (model.status == true) {
+      Future.delayed(const Duration(milliseconds: 100), () {
+        SessionManager.instance.setUser(model.data);
+        SessionManager.instance.setAuthToken(model.data?.token);
+        SessionManager.instance.setLogin(true);
+
+        // Ensure backend always gets latest token (common after reinstall / token rotation).
+        _syncDeviceTokenAfterLogin();
+      });
+    }
+    return model.data;
+  }
+
+  Future<User?> logInFakeUser({
+    required String identity,
+    required String? password,
+    String? deviceToken,
+    required LoginMethod loginMethod,
+  }) async {
+    UserModel model = await ApiService.instance.call(
+        url: WebService.user.logInFakeUser,
+        param: {
+          Params.identity: identity,
+          Params.password: password,
+          Params.deviceToken: deviceToken,
+          Params.device: Platform.isAndroid ? 0 : 1,
+          Params.loginMethod: loginMethod.title()
+        },
+        fromJson: UserModel.fromJson);
+
+    if (model.status == true) {
+      Future.delayed(const Duration(milliseconds: 100), () {
+        SessionManager.instance.setUser(model.data);
+        SessionManager.instance.setAuthToken(model.data?.token);
+        SessionManager.instance.setLogin(true);
+
+        // Ensure backend always gets latest token (common after reinstall / token rotation).
+        _syncDeviceTokenAfterLogin();
+      });
+    } else {
+      BaseController.share.stopLoader();
+      BaseController.share.showSnackBar(model.message);
+    }
+    return model.data;
+  }
+
+  Future<StatusModel> deleteMyAccount() async {
+    StatusModel response = await ApiService.instance.call(
+        url: WebService.user.deleteMyAccount, fromJson: StatusModel.fromJson);
+    return response;
+  }
+
+  Future<StatusModel> logoutUser() async {
+    StatusModel response = await ApiService.instance
+        .call(url: WebService.user.logOutUser, fromJson: StatusModel.fromJson);
+    return response;
+  }
+
+  Future<User?> fetchUserDetails({
+    int? userId,
+    Function()? onError,
+    bool forceRefresh = false,
+  }) async {
+    final uid = userId ?? SessionManager.instance.getUserID();
+    if (uid <= 0) {
+      try {
+        onError?.call();
+      } catch (_) {}
+      return null;
+    }
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (!forceRefresh) {
+      final cached = _fetchUserDetailsCache[uid];
+      if (cached != null) {
+        final age = now - cached.fetchedAtMs;
+        if (age >= 0 && age < _fetchUserDetailsCacheMs) {
+          return cached.user;
+        }
+      }
+    }
+
+    final existingReq = _fetchUserDetailsInFlight[uid];
+    if (existingReq != null) {
+      return existingReq;
+    }
+
+    final req = () async {
+      assert(() {
+        Loggers.info('[FETCH_USER_DETAILS] request userId=$uid');
+        return true;
+      }());
+      try {
+        UserModel userModel = await ApiService.instance.call(
+            url: WebService.user.fetchUserDetails,
+            param: {Params.userId: uid},
+            fromJson: UserModel.fromJson,
+            onError: onError);
+        assert(() {
+          Loggers.info(
+              '[FETCH_USER_DETAILS] response userId=$uid status=${userModel.status} isVerify=${userModel.data?.isVerify} username=${userModel.data?.username}');
+          return true;
+        }());
+        final u = userModel.data;
+        _fetchUserDetailsCache[uid] =
+            _CachedUserDetails(u, DateTime.now().millisecondsSinceEpoch);
+        if (userModel.status == true &&
+            userId == SessionManager.instance.getUserID()) {
+          SessionManager.instance.setUser(u);
+        }
+        return u;
+      } finally {
+        _fetchUserDetailsInFlight.remove(uid);
+      }
+    }();
+
+    _fetchUserDetailsInFlight[uid] = req;
+    return req;
+  }
+
+  Future<ReceivedGiftsData?> fetchUserReceivedGifts(
+      {required int? userId, int? lastItemId}) async {
+    final uid = userId ?? SessionManager.instance.getUserID();
+    if (uid <= 0) return null;
+
+    final ReceivedGiftsModel model = await ApiService.instance.call(
+      url: WebService.user.fetchUserReceivedGifts,
+      fromJson: ReceivedGiftsModel.fromJson,
+      param: {
+        Params.userId: uid,
+        Params.limit: AppRes.paginationLimit,
+        Params.lastItemId: lastItemId,
+      },
+    );
+
+    return model.data;
+  }
+
+  Future<User?> updateUserDetails(
+      {XFile? profilePhoto,
+      String? deviceToken,
+      int? device,
+      String? fullname,
+      String? userName,
+      String? bio,
+      String? email,
+      String? phoneNumber,
+      int? mobileCountryCode,
+      String? countryCode,
+      String? country,
+      String? appLanguage,
+      bool? showMyFollowing,
+      bool? receiveMessage,
+      bool? notifyPostLike,
+      bool? notifyPostComment,
+      bool? notifyFollow,
+      bool? notifyMention,
+      bool? notifyGiftReceived,
+      bool? notifyChat,
+      List<int>? savedMusicIds,
+      double? lat,
+      double? lon,
+      String? whoCanSeePost,
+      String? appLastUsed,
+      String? region,
+      String? regionName,
+      String? timezone,
+      int? audioCallPrice,
+      int? videoCallPrice,
+      int? callPrice,
+      int? isVerify}) async {
+    try {
+      UserModel userModel = await ApiService.instance.multiPartCallApi(
+          url: WebService.user.updateUserDetails,
+          filesMap: {
+            Params.profilePhoto: [profilePhoto]
+          },
+          param: {
+            if (deviceToken != null) Params.deviceToken: deviceToken,
+            if (device != null) Params.device: device,
+            Params.fullname: fullname,
+            Params.username: userName,
+            Params.bio: bio,
+            Params.userEmail: email,
+            Params.userMobileNo: phoneNumber,
+            Params.country: country,
+            Params.countryCode: countryCode,
+            Params.whoCanViewPost: whoCanSeePost,
+            Params.mobileCountryCode: mobileCountryCode,
+            if (audioCallPrice != null) Params.audioCallPrice: audioCallPrice,
+            if (videoCallPrice != null) Params.videoCallPrice: videoCallPrice,
+            if (callPrice != null) Params.callPrice: callPrice,
+            if (isVerify != null) Params.isVerify: isVerify,
+            if (receiveMessage != null)
+              Params.receiveMessage: receiveMessage ? 1 : 0,
+            if (showMyFollowing != null)
+              Params.showMyFollowing: showMyFollowing ? 1 : 0,
+            if (notifyPostLike != null)
+              Params.notifyPostLike: notifyPostLike ? 1 : 0,
+            if (notifyPostComment != null)
+              Params.notifyPostComment: notifyPostComment ? 1 : 0,
+            if (notifyFollow != null) Params.notifyFollow: notifyFollow ? 1 : 0,
+            if (notifyMention != null)
+              Params.notifyMention: notifyMention ? 1 : 0,
+            if (notifyGiftReceived != null)
+              Params.notifyGiftReceived: notifyGiftReceived ? 1 : 0,
+            if (notifyChat != null) Params.notifyChat: notifyChat ? 1 : 0,
+            if (savedMusicIds != null)
+              Params.savedMusicIds: savedMusicIds.join(','),
+            if (appLanguage != null) Params.appLanguage: appLanguage,
+            if (lat != null) Params.lat: lat,
+            if (lon != null) Params.lon: lon,
+            if (appLastUsed != null) Params.appLastUsedAt: appLastUsed,
+            if (region != null) Params.region: region,
+            if (regionName != null) Params.regionName: regionName,
+            if (timezone != null) Params.timezone: timezone
+          },
+          fromJson: UserModel.fromJson);
+      if (userModel.status == true) {
+        SessionManager.instance.setUser(userModel.data);
+        FirebaseFirestoreController.instance.updateUser(userModel.data);
+      }
+      return userModel.data;
+    } catch (e) {
+      Loggers.error(
+          '[UPDATE_USER_DETAILS] failed url=${WebService.user.updateUserDetails} err=$e');
+      return null;
+    }
+  }
+
+  Future<StatusModel> checkUsernameAvailability(
+      {required String userName}) async {
+    return await ApiService.instance.call(
+        url: WebService.user.checkUsernameAvailability,
+        param: {Params.username: userName},
+        fromJson: StatusModel.fromJson);
+  }
+
+  Future<LinksModel> addEditDeleteUserLink(
+      {String? title,
+      String? urlLink,
+      int? linkId,
+      required LinkType linkType}) async {
+    String url;
+
+    switch (linkType) {
+      case LinkType.add:
+        url = WebService.user.addUserLink;
+      case LinkType.edit:
+        url = WebService.user.editeUserLink;
+      case LinkType.delete:
+        url = WebService.user.deleteUserLink;
+    }
+
+    LinksModel model = await ApiService.instance.call(
+        url: url,
+        fromJson: LinksModel.fromJson,
+        param: {
+          Params.linkId: linkId,
+          Params.title: title,
+          Params.url: urlLink
+        });
+    return model;
+  }
+
+  Future<List<User>> searchUsers(
+      {int? lastItemId, String keyWord = '', required int limit}) async {
+    UsersModel model = await ApiService.instance.call(
+        url: WebService.user.searchUsers,
+        param: {
+          if (lastItemId != null) Params.lastItemId: lastItemId,
+          Params.limit: limit,
+          if (keyWord.isNotEmpty) Params.keyword: keyWord,
+        },
+        fromJson: UsersModel.fromJson);
+    return model.data ?? [];
+  }
+
+  Future<List<Follower>> fetchMyFollowers(
+      {required int lastItemId, required int? userId}) async {
+    bool isMe = userId == SessionManager.instance.getUserID();
+    String url = isMe
+        ? WebService.user.fetchMyFollowers
+        : WebService.user.fetchUserFollowers;
+
+    FollowerModel model = await ApiService.instance.call(
+        url: url,
+        param: {
+          Params.limit: AppRes.paginationLimit,
+          if (lastItemId != -1) Params.lastItemId: lastItemId,
+          if (!isMe) Params.userId: userId,
+        },
+        fromJson: FollowerModel.fromJson);
+    return model.data ?? [];
+  }
+
+  Future<List<Following>> fetchMyFollowing(
+      {required int lastItemId, required int? userId}) async {
+    bool isMe = userId == SessionManager.instance.getUserID();
+    String url = isMe
+        ? WebService.user.fetchMyFollowings
+        : WebService.user.fetchUserFollowings;
+
+    FollowingModel model = await ApiService.instance.call(
+        url: url,
+        param: {
+          Params.limit: AppRes.paginationLimit,
+          if (lastItemId != -1) Params.lastItemId: lastItemId,
+          if (!isMe) Params.userId: userId,
+        },
+        fromJson: FollowingModel.fromJson);
+    return model.data ?? [];
+  }
+
+  Future<StatusModel> followUser({required int userId}) async {
+    StatusModel model = await ApiService.instance.call(
+      url: WebService.user.followUser,
+      param: {Params.userId: userId},
+      fromJson: StatusModel.fromJson,
+    );
+    return model;
+  }
+
+  Future<StatusModel> unFollowUser({required int userId}) async {
+    StatusModel model = await ApiService.instance.call(
+      url: WebService.user.unFollowUser,
+      param: {Params.userId: userId},
+      fromJson: StatusModel.fromJson,
+    );
+    return model;
+  }
+
+  Future<StatusModel> toggleCloseFriend({required int userId}) async {
+    final StatusModel model = await ApiService.instance.call(
+      url: WebService.user.toggleCloseFriend,
+      param: {Params.userId: userId},
+      fromJson: StatusModel.fromJson,
+    );
+    return model;
+  }
+
+  Future<StatusModel> unBlockUser({required int userId}) async {
+    StatusModel model = await ApiService.instance.call(
+        url: WebService.user.unBlockUser,
+        param: {Params.userId: userId},
+        fromJson: StatusModel.fromJson);
+
+    return model;
+  }
+
+  Future<StatusModel> blockUser({required int userId}) async {
+    StatusModel model = await ApiService.instance.call(
+        url: WebService.user.blockUser,
+        param: {Params.userId: userId},
+        fromJson: StatusModel.fromJson);
+    return model;
+  }
+
+  Future<StatusModel> reportPost(
+      {required int userId,
+      required String reason,
+      required String description}) async {
+    StatusModel model = await ApiService.instance.call(
+        url: WebService.user.reportUser,
+        param: {
+          Params.userId: userId,
+          Params.reason: reason,
+          Params.description: description,
+        },
+        fromJson: StatusModel.fromJson);
+    return model;
+  }
+
+  Future<List<BlockUsers>> fetchMyBlockedUsers() async {
+    BlockUserModel response = await ApiService.instance.call(
+      url: WebService.user.fetchMyBlockedUsers,
+      fromJson: BlockUserModel.fromJson,
+    );
+    return response.data ?? [];
+  }
+
+  Future<void> updateLastUsedAt() async {
+    try {
+      await ApiService.instance.call(url: WebService.user.updateLastUsedAt);
+    } catch (e) {
+      Loggers.error('ðŸ”´ðŸ”´ðŸ”´: Unexpected error : $e');
+    }
+  }
+
+  // New: Signup (Normal Signup)
+  Future<Map<String, dynamic>> signup(
+      {required Map<String, dynamic> data}) async {
+    final response = await ApiService.instance.call<Map<String, dynamic>>(
+      url: WebService.user.signup,
+      param: data,
+    );
+    return response;
+  }
+
+  // New: Enable Professional (Dashboard)
+  Future<StatusModel> enableProfessional({
+    required String type, // creator | miner | business | creator_miner
+    String? professionalName,
+  }) async {
+    final t = type.trim().toLowerCase();
+    final name = professionalName?.trim();
+    final param = {
+      Params.userType: t,
+      'professional_type': t,
+      Params.type: t,
+      if (name != null && name.isNotEmpty) Params.professionalName: name,
+      if (name != null && name.isNotEmpty) 'name': name,
+      if (name != null && name.isNotEmpty) 'professionalName': name,
+      if (name != null && name.isNotEmpty && t == 'astrologer')
+        'astrologer_name': name,
+      if (name != null && name.isNotEmpty && t == 'astrologer')
+        'astrologerName': name,
+      if (name != null && name.isNotEmpty && t == 'business')
+        'business_name': name,
+      if (name != null && name.isNotEmpty && t == 'business')
+        'businessName': name,
+    };
+    debugPrint('[PRO_ENABLE] param=$param');
+    final StatusModel response = await ApiService.instance.call(
+      url: WebService.user.enableProfessionalDashboard,
+      param: param,
+      fromJson: StatusModel.fromJson,
+    );
+    return response;
+  }
+
+  // New: Professional Dashboard (stats, tasks, earnings, monetization)
+  Future<ProfessionalStatsModel> professionalStats() async {
+    final ProfessionalStatsModel response = await ApiService.instance.call(
+      url: WebService.user.getProfessionalDashboard,
+      fromJson: ProfessionalStatsModel.fromJson,
+    );
+    return response;
+  }
+
+  // New: Disable Professional Dashboard
+  Future<StatusModel> disableProfessional() async {
+    final StatusModel response = await ApiService.instance.call(
+      url: WebService.user.disableProfessionalDashboard,
+      fromJson: StatusModel.fromJson,
+    );
+    return response;
+  }
+
+  // New: Submit Monetization Request
+  Future<StatusModel> submitMonetizationRequest({
+    required Map<String, dynamic> data,
+  }) async {
+    final StatusModel response = await ApiService.instance.call(
+      url: WebService.user.submitMonetizationRequest,
+      param: data,
+      fromJson: StatusModel.fromJson,
+    );
+    return response;
+  }
+
+  // New: Submit Monetization Request (Multipart with files)
+  Future<StatusModel> submitMonetizationRequestMultipart({
+    required Map<String, dynamic> data,
+    Map<String, List<XFile?>> files = const {},
+  }) async {
+    final StatusModel response = await ApiService.instance.multiPartCallApi(
+      url: WebService.user.submitMonetizationRequest,
+      param: data,
+      filesMap: files,
+      fromJson: StatusModel.fromJson,
+    );
+    return response;
+  }
+
+  // New: Fetch Daily Tasks
+  Future<DailyTasksModel> dailyTasks() async {
+    final DailyTasksModel response = await ApiService.instance.call(
+      url: WebService.user.dailyTasks,
+      fromJson: DailyTasksModel.fromJson,
+    );
+    return response;
+  }
+
+  // New: Complete Task - FIXED: Multiple URL candidates for robustness
+  Future<StatusModel> completeTask({required int taskId}) async {
+    final candidatesRaw = <String>[
+      WebService.user.completeTask,
+      '${apiURL}user/completeTask',
+      '${apiURL}user/complete-task',
+      '${apiURL}completeTask',
+      '${apiURL}complete-task',
+      '${baseURL}user/completeTask',
+      '${baseURL}api/user/completeTask',
+    ];
+    
+    final seen = <String>{};
+    final candidates = <String>[];
+    for (final u in candidatesRaw) {
+      final url = u.trim();
+      if (url.isEmpty || seen.contains(url)) continue;
+      seen.add(url);
+      candidates.add(url);
+    }
+    
+    Object? lastError;
+    String? lastUrl;
+    final tried = <String>[];
+    
+    for (final url in candidates) {
+      try {
+        lastUrl = url;
+        tried.add(url);
+        Loggers.info('[COMPLETE_TASK] Trying URL: $url with taskId: $taskId');
+        
+        final StatusModel response = await ApiService.instance.call(
+          url: url,
+          param: {
+            'task_id': taskId,
+            'id': taskId,
+          },
+          fromJson: StatusModel.fromJson,
+        );
+        
+        Loggers.info('[COMPLETE_TASK] SUCCESS on $url: status=${response.status}');
+        return response;
+      } catch (e) {
+        Loggers.info('[COMPLETE_TASK] ERROR on $url: $e');
+        lastError = e;
+        // Continue to next candidate
+      }
+    }
+    
+    throw Exception(
+      'URL Error: tried=${tried.join(', ')} last=${lastUrl ?? ''} - ${lastError?.toString() ?? 'Failed to complete task'}',
+    );
+  }
+
+  // New: Leaderboards (server returns top 100; client can locally page)
+  Future<LeaderboardModel> leaderboard({
+    required String type, // 'creator' | 'miner'
+    String? metricType, // creator only: engagement|views|likes|comments
+    String? period, // daily|weekly|monthly|all
+  }) async {
+    final bool isCreator = type == 'creator';
+    final String url = isCreator
+        ? WebService.user.getCreatorLeaderboard
+        : WebService.user.getMinerLeaderboard;
+
+    // Backend expects POST. It may return list under different keys.
+    final LeaderboardModel response = await ApiService.instance.call(
+      url: url,
+      param: {
+        if (isCreator && (metricType != null)) Params.type: metricType,
+        if (period != null) 'period': period,
+      },
+      fromJson: (json) {
+        // Normalize list key
+        final dynamic raw = json['data'] ??
+            json['leaderboard'] ??
+            json['result'] ??
+            json['list'];
+        final Map<String, dynamic> normalized = {
+          'status': json['status'],
+          'message': json['message'],
+          'data': raw is List
+              ? raw
+              : (raw is Map ? (raw['data'] ?? raw['list']) : null),
+        };
+        return LeaderboardModel.fromJson(normalized);
+      },
+    );
+    return response;
+  }
+
+  // Subscription / Plus (Custom Billing)
+  Future<SubscriptionStatusModel> subscriptionStatus() async {
+    final SubscriptionStatusModel response = await ApiService.instance.get(
+      url: WebService.user.subscriptionStatus,
+      fromJson: SubscriptionStatusModel.fromJson,
+    );
+    return response;
+  }
+
+  Future<SubscriptionPlansModel> subscriptionPlans() async {
+    // Backend can expose different routes; prefer the canonical (hyphen) route.
+    final candidates = <String>[
+      WebService.user.subscriptionPlans, // ${apiURL}user/subscription-plans
+      '${apiURL}user/subscription-plans',
+    ];
+
+    Object? lastError;
+    String? lastUrl;
+    String? lastMethod;
+    for (final url in candidates) {
+      // Try GET first.
+      try {
+        lastUrl = url;
+        lastMethod = 'GET';
+        final SubscriptionPlansModel response = await ApiService.instance
+            .get(
+              url: url,
+              fromJson: SubscriptionPlansModel.fromJson,
+            )
+            .timeout(const Duration(seconds: 12));
+        return response;
+      } catch (e) {
+        lastError = e;
+      }
+
+      // Some backends expose this as POST.
+      try {
+        lastUrl = url;
+        lastMethod = 'POST';
+        final SubscriptionPlansModel response = await ApiService.instance
+            .call(
+              url: url,
+              param: <String, dynamic>{},
+              fromJson: SubscriptionPlansModel.fromJson,
+            )
+            .timeout(const Duration(seconds: 12));
+        return response;
+      } catch (e) {
+        lastError = e;
+      }
+    }
+
+    throw Exception(
+      'URL Error: ${lastUrl ?? ''} method=${lastMethod ?? ''} - ${lastError?.toString() ?? 'Failed to load subscription plans'}',
+    );
+  }
+
+  Future<StickersModel> stickers() async {
+    try {
+      final StickersModel response = await ApiService.instance
+          .get(
+            url: WebService.user.stickers,
+            fromJson: StickersModel.fromJson,
+          )
+          .timeout(const Duration(seconds: 12));
+      return response;
+    } catch (e) {
+      Loggers.error(
+          '[Stickers] fetch failed url=${WebService.user.stickers} err=${e.toString()}');
+      return StickersModel(status: false, message: '', data: <StickerItem>[]);
+    }
+  }
+
+  Future<SubscriptionVerifyModel> verifySubscription({
+    required String gateway, // google_play | razorpay | paypal | stripe
+    required int planId,
+    String? productId,
+    String? purchaseToken,
+    String? razorpayOrderId,
+    String? razorpayPaymentId,
+    String? razorpaySignature,
+    String? paypalOrderId,
+    String? stripePaymentIntentId,
+    String? cashfreeOrderId,
+    String? environment,
+  }) async {
+    final SubscriptionVerifyModel response = await ApiService.instance.call(
+      url: WebService.user.verifySubscription,
+      param: {
+        Params.gateway: gateway,
+        Params.planId: planId,
+        Params.productId: productId,
+        Params.purchaseToken: purchaseToken,
+        Params.razorpayOrderId: razorpayOrderId,
+        Params.razorpayPaymentId: razorpayPaymentId,
+        Params.razorpaySignature: razorpaySignature,
+        Params.paypalOrderId: paypalOrderId,
+        Params.stripePaymentIntentId: stripePaymentIntentId,
+        Params.cashfreeOrderId: cashfreeOrderId,
+        if (environment != null && environment.trim().isNotEmpty)
+          'environment': environment.trim(),
+      },
+      fromJson: SubscriptionVerifyModel.fromJson,
+    );
+    return response;
+  }
+
+  Future<VerificationSubmitModel> submitVerificationRequestMultipart({
+    required String fullName,
+    required String documentType,
+    required String documentNumber,
+    String? address,
+    String? reasonForVerification,
+    String? accountCategory,
+    int? subscriptionId,
+    String? subscriptionName,
+    String? paymentId,
+    XFile? documentFront,
+    XFile? documentBack,
+    XFile? selfie,
+  }) async {
+    final current = SessionManager.instance.getUser();
+    final username = (current?.username ?? '').trim();
+    final mobile = (current?.userMobileNo ?? '').trim();
+
+    Loggers.info(
+        '[SUBMIT_VERIFICATION] username=$username mobile=$mobile subscriptionId=$subscriptionId paymentId=$paymentId');
+
+    final param = <String, dynamic>{
+      // Backend expects these keys
+      if (fullName.trim().isNotEmpty) Params.fullName: fullName,
+      if (username.isNotEmpty) Params.username: username,
+      if (mobile.isNotEmpty) Params.mobileNumber: mobile,
+      Params.documentType: documentType,
+      Params.documentNumber: documentNumber,
+      if (address != null && address.trim().isNotEmpty)
+        Params.address: address.trim(),
+      Params.reasonForVerification: reasonForVerification ?? 'subscription',
+      // Backend also falls back to `reason`.
+      Params.reason: reasonForVerification ?? 'subscription',
+      Params.accountCategory: accountCategory ?? 'individual',
+      if (subscriptionId != null && subscriptionId > 0)
+        Params.subscriptionId: subscriptionId,
+      if (subscriptionName != null && subscriptionName.trim().isNotEmpty)
+        Params.subscriptionName: subscriptionName.trim(),
+      if (paymentId != null && paymentId.trim().isNotEmpty)
+        Params.paymentId: paymentId.trim(),
+    };
+
+    Loggers.info('[SUBMIT_VERIFICATION] PARAMS: $param');
+
+    final files = <String, List<XFile?>>{};
+    final dt = documentType.trim().toLowerCase();
+    if (dt == 'aadhaar' || dt == 'aadhar') {
+      if (documentFront != null) files[Params.aadhaarFront] = [documentFront];
+      if (documentBack != null) files[Params.aadhaarBack] = [documentBack];
+    } else if (dt == 'pan') {
+      if (documentFront != null) files[Params.panCard] = [documentFront];
+    } else if (dt == 'passport') {
+      if (documentFront != null) files[Params.passport] = [documentFront];
+    } else {
+      if (documentFront != null) files[Params.documentFront] = [documentFront];
+      if (documentBack != null) files[Params.documentBack] = [documentBack];
+    }
+    if (selfie != null) {
+      files[Params.selfieWithId] = [selfie];
+    }
+
+    Loggers.info('[SUBMIT_VERIFICATION] FILES KEYS: ${files.keys.toList()}');
+
+    final candidatesRaw = <String>[
+      // Backend route is at API root (no /user)
+      WebService.user.submitVerificationRequestV2,
+      WebService.user.submitVerificationRequest,
+      '${apiURL}submitVerificationRequest',
+      '${apiURL}submitVerificationRequest/',
+      // Some deployments might not have the /api prefix
+      '${baseURL}submitVerificationRequest',
+      '${baseURL}submitVerificationRequest/',
+    ];
+    final seen = <String>{};
+    final candidates = <String>[];
+    for (final u in candidatesRaw) {
+      final url = u.trim();
+      if (url.isEmpty || seen.contains(url)) continue;
+      seen.add(url);
+      candidates.add(url);
+    }
+
+    Object? lastError;
+    String? lastUrl;
+    final tried = <String>[];
+    for (final url in candidates) {
+      try {
+        lastUrl = url;
+        tried.add(url);
+        Loggers.info('[SUBMIT_VERIFICATION] TRYING URL: $url');
+        final VerificationSubmitModel response = await ApiService.instance
+            .multiPartCallApi(
+              url: url,
+              param: Map<String, dynamic>.from(param),
+              filesMap: files,
+              fromJson: VerificationSubmitModel.fromJson,
+            )
+            .timeout(const Duration(seconds: 35));
+        Loggers.success(
+            '[SUBMIT_VERIFICATION] SUCCESS status=${response.status} message=${response.message}');
+        return response;
+      } catch (e) {
+        lastError = e;
+        Loggers.error('[SUBMIT_VERIFICATION] ERROR on $url: $e');
+      }
+    }
+
+    throw Exception(
+      'URL Error: tried=${tried.join(', ')} last=${lastUrl ?? ''} - ${lastError?.toString() ?? 'Failed to submit verification request'}',
+    );
+  }
+
+  Future<VerificationStatusModel> fetchVerificationStatus({
+    int? requestId,
+  }) async {
+    final candidatesRaw = <String>[
+      WebService.user.getVerificationStatus,
+      '${apiURL}getVerificationStatus',
+      '${apiURL}getVerificationStatus/',
+      WebService.user.verificationStatus,
+      '${apiURL}verification-status',
+      '${apiURL}verification-status/',
+    ];
+    final seen = <String>{};
+    final candidates = <String>[];
+    for (final u in candidatesRaw) {
+      final url = u.trim();
+      if (url.isEmpty || seen.contains(url)) continue;
+      seen.add(url);
+      candidates.add(url);
+    }
+
+    final param = <String, dynamic>{
+      Params.userId: SessionManager.instance.getUserID(),
+      if (requestId != null && requestId > 0)
+        Params.verificationRequestId: requestId,
+    };
+
+    Object? lastError;
+    String? lastUrl;
+    String? lastMethod;
+    for (final url in candidates) {
+      // Try GET first.
+      try {
+        lastUrl = url;
+        lastMethod = 'GET';
+        final VerificationStatusModel response = await ApiService.instance.get(
+          url: url,
+          param: Map<String, dynamic>.from(param),
+          fromJson: VerificationStatusModel.fromJson,
+        );
+        return response;
+      } catch (e) {
+        lastError = e;
+      }
+
+      // Many backends use POST.
+      try {
+        lastUrl = url;
+        lastMethod = 'POST';
+        final VerificationStatusModel response = await ApiService.instance.call(
+          url: url,
+          param: Map<String, dynamic>.from(param),
+          fromJson: VerificationStatusModel.fromJson,
+        );
+        return response;
+      } catch (e) {
+        lastError = e;
+      }
+    }
+
+    throw Exception(
+      'URL Error: ${lastUrl ?? ''} method=${lastMethod ?? ''} - ${lastError?.toString() ?? 'Failed to fetch verification status'}',
+    );
+  }
+}
+ƒæ

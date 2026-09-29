@@ -1,0 +1,452 @@
+import 'dart:convert';
+
+import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:get_storage/get_storage.dart';
+import 'package:shortzz/common/manager/logger.dart';
+import 'package:shortzz/common/manager/session_manager.dart';
+import 'package:shortzz/common/service/api/ad_event_service.dart';
+import 'package:shortzz/common/service/api/post_service.dart';
+import 'package:shortzz/model/post_story/post_by_id.dart';
+import 'package:shortzz/model/post_story/post_model.dart';
+import 'package:shortzz/model/general/settings_model.dart';
+import 'package:shortzz/model/promotions/app_open_promotion_model.dart';
+import 'package:shortzz/screen/post_screen/single_post_screen.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+class AppOpenPromotionManager {
+  AppOpenPromotionManager._();
+
+  static final AppOpenPromotionManager instance = AppOpenPromotionManager._();
+
+  static const String _boxName = 'shortzz';
+  static const String _lastShownAtKey = 'app_open_promo_last_shown_at';
+  static const String _shownCountKey = 'app_open_promo_shown_count';
+  static const String _lastPromotionIdKey = 'app_open_promo_last_promotion_id';
+
+  final GetStorage _box = GetStorage(_boxName);
+
+  bool _isShowing = false;
+  bool _shownThisSession = false;
+
+  Future<void> maybeShowAppOpenPromotion() async {
+    if (_isShowing) return;
+    if (_shownThisSession) return;
+    // Skip if user is not logged in (avoid 401)
+    if (!SessionManager.instance.isLogin()) {
+      Loggers.info('AppOpenPromotion skip: user not logged in');
+      return;
+    }
+    final context = Get.context ?? Get.overlayContext;
+    if (context == null) {
+      Loggers.warning('AppOpenPromotion skip: context null');
+      return;
+    }
+
+    AppOpenPromotion? selected;
+    bool selectedFromApi = false;
+    try {
+      final raw = await AdEventService.instance.getAppOpenPopup();
+      final dynamic data = raw['data'];
+      if (data is Map) {
+        final popup = AppOpenPopup.fromJson(data.cast<String, dynamic>());
+        selected = _promoFromAppOpenPopup(popup);
+        selectedFromApi = true;
+      }
+    } catch (e) {
+      Loggers.warning('AppOpenPopup API fetch failed, fallback to settings: $e');
+    }
+
+    selected ??= _promoFromSettings();
+    if (selected == null) {
+      Loggers.warning('AppOpenPromotion skip: no promo from API and no promo in settings');
+      return;
+    }
+    final AppOpenPromotion promo = selected;
+
+    Loggers.info(
+      'AppOpenPromotion using ${selectedFromApi ? 'API' : 'settings'} promo id=${promo.id}',
+    );
+
+    if (!_isEligible(promo)) {
+      Loggers.info(
+        'AppOpenPromotion skip: not eligible id=${promo.id} freq=${promo.frequency} hrs=${promo.frequencyHours}',
+      );
+      return;
+    }
+
+    _isShowing = true;
+    bool attemptedDialog = false;
+
+    // Log impression for analytics + miner points (new backend flow)
+    try {
+      if (promo.id != null) {
+        await AdEventService.instance.logAdEvent(
+          eventType: 'view',
+          adId: promo.id!,
+          context: 'app_open',
+        );
+      }
+    } catch (e) {
+      Loggers.warning('AppOpenPopup view log failed: $e');
+    }
+
+    try {
+      attemptedDialog = true;
+      await Get.dialog(
+        _AppOpenPromotionDialog(
+          promotion: promo,
+          onPrimaryTap: () async {
+            try {
+              if (promo.id != null) {
+                await AdEventService.instance.logAdEvent(
+                  eventType: 'click',
+                  adId: promo.id!,
+                  context: 'app_open',
+                );
+              }
+            } catch (e) {
+              Loggers.warning('AppOpenPopup click log failed: $e');
+            }
+            await _handleAction(promo);
+          },
+          onCloseTap: () async {
+          },
+        ),
+        barrierDismissible: false,
+      );
+    } finally {
+      if (attemptedDialog) {
+        _recordShown(promo);
+      }
+      _isShowing = false;
+    }
+  }
+
+  AppOpenPromotion _promoFromAppOpenPopup(AppOpenPopup popup) {
+    final mapped = AppOpenPromotion(
+      id: popup.id,
+      title: (popup.title ?? '').trim(),
+      subtitle: (popup.description ?? '').trim(),
+      mediaType: 'image',
+      mediaUrl: (popup.mediaUrl ?? '').trim(),
+      thumbnailUrl: null,
+      cta: 'Open',
+      action: 'open_url',
+      actionValue: (popup.ctaUrl ?? '').trim(),
+      frequency: 'always',
+      frequencyHours: null,
+      startsAt: null,
+      endsAt: null,
+      priority: 0,
+      metadata: null,
+    );
+    return _applyFrequencyJson(mapped, popup.frequencyJson);
+  }
+
+  AppOpenPromotion? _promoFromSettings() {
+    try {
+      final setting = SessionManager.instance.getSettings();
+      final p = setting?.appOpenPopup;
+      if (p == null) return null;
+
+      final mediaUrl = (p.mediaUrl ?? '').trim();
+      final title = (p.title ?? '').trim();
+      if (mediaUrl.isEmpty && title.isEmpty) return null;
+
+      final mapped = AppOpenPromotion(
+        id: p.id,
+        title: title,
+        subtitle: (p.description ?? '').trim(),
+        mediaType: 'image',
+        mediaUrl: mediaUrl,
+        thumbnailUrl: null,
+        cta: 'Open',
+        action: 'open_url',
+        actionValue: (p.ctaUrl ?? '').trim(),
+        frequency: 'always',
+        frequencyHours: null,
+        startsAt: null,
+        endsAt: null,
+        priority: 0,
+        metadata: null,
+      );
+
+      return _applyFrequencyJson(mapped, p.frequencyJson);
+    } catch (e) {
+      Loggers.error('AppOpenPromotion settings mapping failed: $e');
+      return null;
+    }
+  }
+
+  AppOpenPromotion _applyFrequencyJson(AppOpenPromotion promo, String? raw) {
+    final s = (raw ?? '').trim();
+    if (s.isEmpty) return promo;
+
+    try {
+      final decoded = jsonDecode(s);
+      if (decoded is! Map) return promo;
+      final map = decoded.cast<String, dynamic>();
+
+      final freq = (map['frequency'] ?? map['freq'] ?? '').toString().trim();
+      final hoursRaw = map['frequency_hours'] ?? map['hours'] ?? map['frequencyHours'];
+      final hours = (hoursRaw is num) ? hoursRaw : num.tryParse('$hoursRaw');
+
+      if (freq.isNotEmpty) {
+        promo.frequency = freq;
+      }
+      if (hours != null) {
+        promo.frequencyHours = hours;
+        if ((promo.frequency ?? '').trim().isEmpty) {
+          promo.frequency = 'custom_hours';
+        }
+      }
+      return promo;
+    } catch (e) {
+      Loggers.warning(
+        'AppOpenPromotion: invalid frequency_json="$s" err=$e (fallback always)',
+      );
+      promo.frequency = 'always';
+      promo.frequencyHours = null;
+      return promo;
+    }
+  }
+
+  bool _isEligible(AppOpenPromotion promo) {
+    final now = DateTime.now();
+
+    // Respect schedule if provided
+    final startsAt = DateTime.tryParse((promo.startsAt ?? '').toString());
+    if (startsAt != null && now.isBefore(startsAt)) {
+      return false;
+    }
+    final endsAt = DateTime.tryParse((promo.endsAt ?? '').toString());
+    if (endsAt != null && now.isAfter(endsAt)) {
+      return false;
+    }
+
+    final lastPromotionId = _box.read(_lastPromotionIdKey);
+    final lastShownAtMs = _box.read(_lastShownAtKey);
+    final lastShownAt = (lastShownAtMs is int)
+        ? DateTime.fromMillisecondsSinceEpoch(lastShownAtMs)
+        : null;
+
+    // If admin changed the promotion, don't block with previous cooldown
+    final isNewPromotion =
+        (promo.id != null) && ('$lastPromotionId' != '${promo.id}');
+    final effectiveLastShownAt = isNewPromotion ? null : lastShownAt;
+
+    final frequency = (promo.frequency ?? '').toLowerCase().trim();
+
+    if (frequency == 'always' || frequency.isEmpty) {
+      return true;
+    }
+
+    if (frequency == 'once_per_day') {
+      if (effectiveLastShownAt == null) return true;
+      return !(effectiveLastShownAt.year == now.year &&
+          effectiveLastShownAt.month == now.month &&
+          effectiveLastShownAt.day == now.day);
+    }
+
+    if (frequency == 'every_24h') {
+      if (effectiveLastShownAt == null) return true;
+      return now.difference(effectiveLastShownAt) >= const Duration(hours: 24);
+    }
+
+    if (frequency == 'custom_hours') {
+      final hours = (promo.frequencyHours ?? 0).toDouble();
+      if (hours <= 0) return true;
+      if (effectiveLastShownAt == null) return true;
+      final waitMs = (hours * 60 * 60 * 1000).round();
+      return now.difference(effectiveLastShownAt) >=
+          Duration(milliseconds: waitMs);
+    }
+
+    return true;
+  }
+
+  void _recordShown(AppOpenPromotion promo) {
+    final now = DateTime.now();
+    final dynamic rawCount = _box.read(_shownCountKey);
+    final int count = (rawCount is int) ? rawCount : 0;
+
+    _shownThisSession = true;
+    _box.write(_lastShownAtKey, now.millisecondsSinceEpoch);
+    _box.write(_shownCountKey, count + 1);
+    if (promo.id != null) {
+      _box.write(_lastPromotionIdKey, promo.id);
+    }
+  }
+
+  Future<void> _handleAction(AppOpenPromotion promo) async {
+    final action = (promo.action ?? '').toLowerCase().trim();
+
+    if (action == 'open_post') {
+      final postId = int.tryParse((promo.actionValue ?? '').toString());
+      if (postId == null || postId <= 0) {
+        return;
+      }
+      try {
+        PostByIdModel model =
+            await PostService.instance.fetchPostById(postId: postId);
+        final Post? post = model.data?.post;
+        if (model.status == true && post != null) {
+          await Get.to(
+            () => SinglePostScreen(post: post, isFromNotification: true),
+            preventDuplicates: false,
+          );
+        }
+      } catch (e) {
+        Loggers.error('open_post failed: $e');
+      }
+      return;
+    }
+
+    if (action == 'open_url') {
+      var url = (promo.actionValue ?? '').trim();
+      if (url.isEmpty) return;
+      final parsed = Uri.tryParse(url);
+      final uri = (parsed != null && parsed.scheme.isEmpty)
+          ? Uri.tryParse('https://$url')
+          : parsed;
+      if (uri == null) return;
+      try {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      } catch (e) {
+        Loggers.error('open_url failed: $e');
+      }
+      return;
+    }
+  }
+}
+
+class _AppOpenPromotionDialog extends StatelessWidget {
+  final AppOpenPromotion promotion;
+  final Future<void> Function() onPrimaryTap;
+  final Future<void> Function() onCloseTap;
+
+  const _AppOpenPromotionDialog({
+    required this.promotion,
+    required this.onPrimaryTap,
+    required this.onCloseTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final size = MediaQuery.of(context).size;
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        Navigator.of(context).pop();
+        await onCloseTap();
+      },
+      child: Dialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(18),
+          child: SizedBox(
+            width: double.infinity,
+            height: size.height * 0.85,
+            child: Column(
+              mainAxisSize: MainAxisSize.max,
+              children: [
+                Expanded(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () async {
+                      Navigator.of(context).pop();
+                      onPrimaryTap();
+                    },
+                    child: Column(
+                      mainAxisSize: MainAxisSize.max,
+                      children: [
+                        if ((promotion.mediaUrl ?? '').isNotEmpty)
+                          Expanded(
+                            child: Container(
+                              width: double.infinity,
+                              color: Colors.black,
+                              child: Center(
+                                child: Image.network(
+                                  promotion.mediaUrl ?? '',
+                                  fit: BoxFit.contain,
+                                  errorBuilder: (_, __, ___) => const SizedBox(),
+                                ),
+                              ),
+                            ),
+                          )
+                        else
+                          const SizedBox(height: 12),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              promotion.title ?? '',
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ),
+                        if ((promotion.subtitle ?? '').isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                            child: Align(
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                promotion.subtitle ?? '',
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w400,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () {
+                            Navigator.of(context).pop();
+                            onCloseTap();
+                          },
+                          style: OutlinedButton.styleFrom(
+                            minimumSize: const Size.fromHeight(46),
+                          ),
+                          child: const Text('Close'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: () async {
+                            Navigator.of(context).pop();
+                            onPrimaryTap();
+                          },
+                          style: ElevatedButton.styleFrom(
+                            minimumSize: const Size.fromHeight(46),
+                          ),
+                          child: Text((promotion.cta ?? 'Open').trim()),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          )
+        ),
+      ),
+    );
+  }
+}

@@ -1,0 +1,134 @@
+import 'package:shortzz/common/service/smart_assist/intent_engine.dart';
+import 'package:shortzz/common/service/smart_assist/voice_intent.dart';
+import 'package:shortzz/common/service/smart_assist/voice_ui_action_registry.dart';
+
+class LocalRuleIntentEngine implements IntentEngine {
+  @override
+  Future<VoiceIntent?> parse(String utterance) async {
+    final cmd = _normalize(utterance);
+    final cleaned = _stripWakeWord(cmd);
+
+    // Instant navigation: back / वापस / common typos
+    if (_isBackCommand(cleaned)) {
+      return const VoiceIntent(action: 'back', target: 'nav', confidence: 1.0);
+    }
+
+    // If the UI is waiting for a 1/2/3 style choice, interpret this utterance
+    // as a selection command.
+    if (VoiceUiActionRegistry.instance.pendingSelectionCount.value > 0) {
+      final idx = VoiceUiActionRegistry.instance.resolveFeedIndexFromCmd(cleaned);
+      if (idx != null) {
+        return VoiceIntent(action: 'select', target: 'disambiguation', index: idx, confidence: 1.0);
+      }
+    }
+
+    final wantsLike = cleaned.contains('like') || cleaned.contains('heart') || cleaned.contains('लाइक');
+    final wantsComment = cleaned.contains('comment') || cleaned.contains('कमेंट') || cleaned.contains('टिप्पणी');
+    final wantsReport = cleaned.contains('report') || cleaned.contains('रिपोर्ट');
+
+    if (wantsLike || wantsComment || wantsReport) {
+      final idx = VoiceUiActionRegistry.instance.resolveFeedIndexFromCmd(cleaned);
+      if (wantsLike) {
+        return VoiceIntent(action: 'like', target: 'feed_post', index: idx);
+      }
+      if (wantsComment) {
+        return VoiceIntent(action: 'comment', target: 'feed_post', index: idx);
+      }
+      if (wantsReport) {
+        return VoiceIntent(action: 'report', target: 'feed_post', index: idx);
+      }
+    }
+
+    if (cleaned.contains('reason') || cleaned.contains('कारण') || cleaned.contains('reason select')) {
+      final idx = _extractIndex(cleaned);
+      if (idx != null) {
+        return VoiceIntent(action: 'select', target: 'report_reason', index: idx);
+      }
+      final after = _afterKeywords(cleaned, const ['reason', 'कारण']);
+      if (after.isNotEmpty) {
+        return VoiceIntent(action: 'select', target: 'report_reason', value: after);
+      }
+      return const VoiceIntent(action: 'select', target: 'report_reason');
+    }
+
+    if (cleaned.contains('submit') || cleaned.contains('ससबमिट') || cleaned.contains('सबमिट')) {
+      return const VoiceIntent(action: 'submit', target: 'report_sheet');
+    }
+
+    if (cleaned.contains('stop typing') || cleaned.contains('typing band') || cleaned.contains('लिखना बंद')) {
+      return const VoiceIntent(action: 'stop_typing', target: 'report_description');
+    }
+
+    if (cleaned.contains('description') || cleaned.contains('विवरण') || cleaned.contains('discription') || cleaned.contains('likh') || cleaned.contains('लिख')) {
+      final after = _afterKeywords(cleaned, const ['description', 'विवरण', 'discription', 'likh', 'लिख']);
+      return VoiceIntent(action: 'type', target: 'report_description', value: after.isEmpty ? null : after);
+    }
+
+    if (cleaned.isNotEmpty) {
+      return VoiceIntent(action: 'unknown', target: 'none', value: cleaned, confidence: 0.0);
+    }
+
+    return null;
+  }
+
+  static String _normalize(String input) {
+    return input
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9\u0900-\u097F\s]'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  static String _stripWakeWord(String cmd) {
+    var out = cmd;
+    if (out.startsWith('iyol ')) {
+      out = out.substring('iyol '.length);
+    }
+    if (out == 'iyol') return '';
+    return out.trim();
+  }
+
+  static int? _extractIndex(String cmd) {
+    if (cmd.contains('first') || cmd.contains('pehli') || cmd.contains('पहली') || cmd.contains('1')) {
+      return 0;
+    }
+    if (cmd.contains('second') || cmd.contains('dusri') || cmd.contains('दूसरी') || cmd.contains('2')) {
+      return 1;
+    }
+    if (cmd.contains('third') || cmd.contains('teesri') || cmd.contains('तीसरी') || cmd.contains('3')) {
+      return 2;
+    }
+    return null;
+  }
+
+  static String _afterKeywords(String cmd, List<String> keywords) {
+    final lower = cmd.toLowerCase();
+    for (final k in keywords) {
+      final kk = k.toLowerCase();
+      final idx = lower.indexOf(kk);
+      if (idx >= 0) {
+        final out = lower.substring(idx + kk.length).trim();
+        if (out.isNotEmpty) return out;
+      }
+    }
+    return '';
+  }
+
+  static bool _isBackCommand(String cmd) {
+    final lower = cmd.toLowerCase();
+    return lower == 'back' ||
+        lower == 'bak' ||
+        lower == 'bck' ||
+        lower == 'bakc' ||
+        lower == 'baack' ||
+        lower == 'baak' ||
+        lower.contains('go back') ||
+        lower.contains('navigate back') ||
+        lower.contains('back karo') ||
+        lower.contains('बैक') ||
+        lower.contains('वापस') ||
+        lower.contains('पीछे') ||
+        lower.contains('पिछे') ||
+        lower.contains('back');
+  }
+}

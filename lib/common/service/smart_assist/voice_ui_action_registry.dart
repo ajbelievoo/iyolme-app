@@ -1,0 +1,124 @@
+import 'package:get/get.dart';
+import 'package:shortzz/screen/post_screen/post_screen_controller.dart';
+
+class VoiceUiActionRegistry {
+  VoiceUiActionRegistry._();
+
+  static final VoiceUiActionRegistry instance = VoiceUiActionRegistry._();
+
+  final RxString currentScreen = ''.obs;
+
+  final RxList<int> feedPostIds = <int>[].obs;
+
+  final RxInt pendingSelectionCount = 0.obs;
+  void Function(int index)? _pendingAction;
+
+  void setFeedPosts(List<int> ids) {
+    feedPostIds.value = ids;
+    if (ids.isEmpty) {
+      clearPending();
+    }
+  }
+
+  void setCurrentScreen(String screen) {
+    currentScreen.value = screen;
+  }
+
+  Map<String, dynamic> buildContextPayload() {
+    return {
+      'screen': currentScreen.value,
+      'visible_items': feedPostIds.length,
+    };
+  }
+
+  int? resolveFeedIndexFromCmd(String cmd) {
+    final lower = cmd.toLowerCase();
+
+    // Numeric index support: "1".."5" => 0..4
+    final m = RegExp(r'\b([1-5])\b').firstMatch(lower);
+    if (m != null) {
+      final n = int.tryParse(m.group(1) ?? '');
+      if (n != null && n >= 1 && n <= 5) return n - 1;
+    }
+
+    if (lower.contains('first') || lower.contains('pehli') || lower.contains('pehle') || lower.contains('पहली')) {
+      return 0;
+    }
+    if (lower.contains('second') || lower.contains('dusri') || lower.contains('dusre') || lower.contains('दूसरी')) {
+      return 1;
+    }
+    if (lower.contains('third') || lower.contains('teesri') || lower.contains('teesre') || lower.contains('तीसरी')) {
+      return 2;
+    }
+    if (lower.contains('fourth') || lower.contains('chauthi') || lower.contains('चौथी')) {
+      return 3;
+    }
+    if (lower.contains('fifth') || lower.contains('paanchvi') || lower.contains('पांचवी') || lower.contains('पाँचवी')) {
+      return 4;
+    }
+
+    return null;
+  }
+
+  int? _postIdAt(int index) {
+    if (index < 0 || index >= feedPostIds.length) return null;
+    return feedPostIds[index];
+  }
+
+  Future<void> likeFeedPostByIndex(int index) async {
+    final postId = _postIdAt(index);
+    if (postId == null) return;
+    if (!Get.isRegistered<PostScreenController>(tag: '$postId')) return;
+    final c = Get.find<PostScreenController>(tag: '$postId');
+    c.onLike(c.postData.value);
+  }
+
+  Future<void> commentFeedPostByIndex(int index) async {
+    final postId = _postIdAt(index);
+    if (postId == null) return;
+    if (!Get.isRegistered<PostScreenController>(tag: '$postId')) return;
+    final c = Get.find<PostScreenController>(tag: '$postId');
+    c.onComment();
+  }
+
+  Future<void> reportFeedPostByIndex(int index) async {
+    final postId = _postIdAt(index);
+    if (postId == null) return;
+    if (!Get.isRegistered<PostScreenController>(tag: '$postId')) return;
+    final c = Get.find<PostScreenController>(tag: '$postId');
+    c.handleReport(c.postData.value);
+  }
+
+  void requestDisambiguation({
+    required int count,
+    required void Function(int index) onChosen,
+  }) {
+    if (count <= 0) return;
+    pendingSelectionCount.value = count;
+    _pendingAction = onChosen;
+
+    try {
+      Get.rawSnackbar(
+        message: 'Kaunsi post? 1/2/3 (pehli/dusri/teesri) bolo.',
+        duration: const Duration(seconds: 2),
+      );
+    } catch (_) {
+      // ignore
+    }
+  }
+
+  void selectIndex(int index) {
+    final action = _pendingAction;
+    clearPending();
+    if (action == null) return;
+    action(index);
+  }
+
+  void clearPending() {
+    pendingSelectionCount.value = 0;
+    _pendingAction = null;
+    if (Get.isDialogOpen == true) {
+      Get.back();
+    }
+  }
+}

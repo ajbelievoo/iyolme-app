@@ -1,0 +1,480 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:get/get.dart';
+import 'package:get_storage/get_storage.dart';
+import 'package:shortzz/common/manager/logger.dart';
+import 'package:shortzz/common/service/api/user_service.dart';
+import 'package:shortzz/common/controller/firebase_firestore_controller.dart';
+import 'package:shortzz/common/manager/session_manager.dart';
+import 'package:shortzz/model/general/status_model.dart';
+import 'package:shortzz/model/professional/daily_tasks_model.dart';
+import 'package:shortzz/model/professional/leaderboard_model.dart';
+import 'package:shortzz/model/professional/professional_stats_model.dart';
+import 'package:image_picker/image_picker.dart';
+
+class ProfessionalController extends GetxController {
+  final isLoading = false.obs;
+  final stats = Rxn<ProfessionalStatsModel>();
+  final tasks = <DailyTask>[].obs;
+  final leaderboard = <LeaderboardEntry>[].obs;
+  final leaderboardType = 'creator'.obs;
+  final monetizationEligible = false.obs;
+  final monetizationSubmittedLocal = false.obs;
+  final lbLoadingMore = false.obs;
+  final lbInitialLoading = false.obs;
+  // Fallback when backend dashboard API returns 500/status:false
+  final localProfessionalEnabled = false.obs;
+  // Local paging over server's top-100 leaderboards
+  final List<LeaderboardEntry> _lbAll = [];
+  int _lbPageIndex = 0;
+  static const int _lbPageSize = 20;
+  bool _lbHasMore = true;
+
+  static const String _boxName = 'shortzz';
+  static const String _monetizationSubmittedKey = 'monetization_submitted_local';
+  final GetStorage _box = GetStorage(_boxName);
+
+  bool get lbHasMore => _lbHasMore;
+
+  @override
+  void onInit() {
+    super.onInit();
+    try {
+      final v = _box.read(_monetizationSubmittedKey);
+      monetizationSubmittedLocal.value = v == true;
+    } catch (_) {
+      monetizationSubmittedLocal.value = false;
+    }
+    fetchAll();
+  }
+
+  void clearLocalMonetizationSubmission() {
+    monetizationSubmittedLocal.value = false;
+    try {
+      _box.remove(_monetizationSubmittedKey);
+      _box.write(_monetizationSubmittedKey, false);
+    } catch (_) {}
+    Loggers.info('[PRO] clearLocalMonetizationSubmission -> submittedLocal=false');
+  }
+
+  Future<void> fetchAll() async {
+    isLoading.value = true;
+    try {
+      final s = await UserService.instance.professionalStats();
+      final ms = s.monetizationStatus;
+      Loggers.info(
+        '[PRO] professionalStats status=${s.status} enabled=${s.professionalEnabled} monetizationStatus=$ms targetsComplete=${s.targetsComplete} submittedLocal=${monetizationSubmittedLocal.value}',
+      );
+      // DEBUG: Log rates/conversions data to diagnose NOT_SET issue
+      try {
+        Loggers.info('[PRO] DEBUG: data=${s.data}');
+        Loggers.info('[PRO] DEBUG: likePoints=${s.likePoints}, viewPoints=${s.viewPoints}, commentPoints=${s.commentPoints}');
+        Loggers.info('[PRO] DEBUG: pointsPerToken=${s.pointsPerToken}, tokenPerPoint=${s.tokenPerPoint}');
+        Loggers.info('[PRO] DEBUG: creditsPerToken=${s.creditsPerToken}, tokenPerCredit=${s.tokenPerCredit}');
+        Loggers.info('[PRO] DEBUG: tokenPerDollar=${s.tokenPerDollar}, dollarPerToken=${s.dollarPerToken}');
+      } catch (_) {}
+      try {
+        final rawType = s.data?['professional_type'] ??
+            s.data?['type'] ??
+            s.data?['dashboard_type'] ??
+            s.data?['user_type'] ??
+            (s.data?['user'] is Map ? (s.data?['user'] as Map)['professional_type'] : null) ??
+            (s.data?['profile'] is Map ? (s.data?['profile'] as Map)['professional_type'] : null);
+        Loggers.info('[PRO] typeRaw=$rawType typeParsed=${s.professionalType} keys=${s.data?.keys.toList()}');
+      } catch (_) {}
+      // If backend returns internal error, do NOT overwrite previous state.
+      if (s.status == true) {
+        stats.value = s;
+        localProfessionalEnabled.value = s.professionalEnabled;
+        monetizationEligible.value = s.monetizationEligible;
+
+        try {
+          final uid = SessionManager.instance.getUserID();
+          if (uid > 0) {
+            await FirebaseFirestoreController.instance.db
+                .collection('app_users')
+                .doc('$uid')
+                .set(
+              {
+                'professional_type': s.professionalType,
+                'professional_enabled': s.professionalEnabled,
+              },
+              SetOptions(merge: true),
+            );
+          }
+        } catch (_) {}
+
+        if (ms != 'pending') {
+          if (monetizationSubmittedLocal.value != false) {
+            monetizationSubmittedLocal.value = false;
+            try {
+              _box.write(_monetizationSubmittedKey, false);
+            } catch (_) {}
+          }
+        }
+      } else {
+        // keep previous state if backend returns an error
+      }
+      // Do not auto-navigate; the dashboard will show inline Enable UI when not enabled
+      // Daily tasks now come inside getProfessionalDashboard response
+      if (s.status == true) {
+        final dynamic raw = s.data?['daily_tasks'] ?? s.data?['dailyTasks'] ?? s.data?['tasks'];
+        dynamic list = raw;
+        if (raw is Map) {
+          list = raw['data'] ?? raw['list'] ?? raw['tasks'] ?? raw['daily_tasks'] ?? raw['dailyTasks'];
+        }
+        final daily = (list as List?)
+                ?.map((e) {
+                  if (e is Map<String, dynamic>) return DailyTask.fromJson(e);
+                  if (e is Map) return DailyTask.fromJson(e.cast<String, dynamic>());
+                  return null;
+                })
+                .whereType<DailyTask>()
+                .toList() ??
+            <DailyTask>[];
+        if (daily.isNotEmpty) {
+          tasks.assignAll(daily);
+          // Load saved progress from local storage
+          _loadSavedTaskProgress();
+          Loggers.success('[PRO] Daily tasks from professionalStats: ${daily.length}');
+        } else {
+          try {
+            final t = await UserService.instance.dailyTasks();
+            tasks.assignAll(t.data ?? <DailyTask>[]);
+            // Load saved progress from local storage
+            _loadSavedTaskProgress();
+            Loggers.success('[PRO] Daily tasks from /dailyTasks fallback: ${tasks.length}');
+          } catch (e) {
+            Loggers.error('[PRO] Daily tasks fallback failed: $e');
+            tasks.assignAll(<DailyTask>[]);
+          }
+        }
+      }
+    } finally {
+      isLoading.value = false;
+    }
+
+    // Load leaderboard in background so dashboard opens fast
+    lbInitialLoading.value = true;
+    Future(() async {
+      try {
+        await fetchLeaderboard(leaderboardType.value);
+      } catch (_) {
+      } finally {
+        lbInitialLoading.value = false;
+      }
+    });
+  }
+
+  Future<void> fetchLeaderboard(String type) async {
+    leaderboardType.value = type;
+    _lbAll.clear();
+    _lbPageIndex = 0;
+    _lbHasMore = true;
+    try {
+      final lb = await UserService.instance.leaderboard(
+        type: type,
+        metricType: type == 'creator' ? 'engagement' : null,
+        period: 'daily',
+      );
+      _lbAll.addAll(lb.data ?? []);
+      leaderboard.assignAll(_nextLbSlice(reset: true));
+      _lbHasMore = leaderboard.length < _lbAll.length;
+      Loggers.success('[PRO] Leaderboard($type) total=${_lbAll.length} page=${leaderboard.length}');
+    } catch (e) {
+      Loggers.error('[PRO] Leaderboard($type) failed: $e');
+      leaderboard.clear();
+      _lbHasMore = false;
+      rethrow;
+    }
+  }
+
+  Future<void> loadMoreLeaderboard() async {
+    if (lbLoadingMore.value || !_lbHasMore) return;
+    lbLoadingMore.value = true;
+    try {
+      final slice = _nextLbSlice();
+      if (slice.isEmpty) {
+        _lbHasMore = false;
+      } else {
+        leaderboard.addAll(slice);
+        _lbHasMore = leaderboard.length < _lbAll.length;
+      }
+    } finally {
+      lbLoadingMore.value = false;
+    }
+  }
+
+  List<LeaderboardEntry> _nextLbSlice({bool reset = false}) {
+    if (reset) _lbPageIndex = 0;
+    final start = _lbPageIndex * _lbPageSize;
+    if (start >= _lbAll.length) return const [];
+    final end = (start + _lbPageSize).clamp(0, _lbAll.length);
+    _lbPageIndex++;
+    return _lbAll.sublist(start, end);
+  }
+
+  Future<StatusModel> completeTask(int taskId) async {
+    Loggers.info('[PRO_CTRL] completeTask called with taskId: $taskId');
+    try {
+      final res = await UserService.instance.completeTask(taskId: taskId);
+      Loggers.info('[PRO_CTRL] completeTask API response: status=${res.status}, message=${res.message}');
+      await refreshTasks();
+      return res;
+    } catch (e) {
+      Loggers.info('[PRO_CTRL] completeTask error: $e');
+      // FALLBACK: If API fails (404), update task progress locally
+      if (e.toString().contains('404') || e.toString().contains('URL Error')) {
+        Loggers.info('[PRO_CTRL] FALLBACK: Backend API not available, updating task locally');
+        _updateTaskProgressLocally(taskId);
+        // Return success so UI doesn't show error
+        return StatusModel(status: true, message: 'Task progress updated locally');
+      }
+      rethrow;
+    }
+  }
+
+  /// FALLBACK: Update task progress locally when backend API is not available
+  void _updateTaskProgressLocally(int taskId) {
+    Loggers.info('[PRO_CTRL] _updateTaskProgressLocally for taskId: $taskId');
+    final taskIndex = tasks.indexWhere((t) => t.id == taskId);
+    if (taskIndex == -1) {
+      Loggers.info('[PRO_CTRL] Task not found: $taskId');
+      return;
+    }
+    
+    final task = tasks[taskIndex];
+    final currentProgress = task.progressCount ?? 0;
+    final requiredCount = task.requiredCount ?? 1;
+    
+    Loggers.info('[PRO_CTRL] Current progress: $currentProgress / $requiredCount');
+    
+    // Increment progress
+    final newProgress = currentProgress + 1;
+    final isCompleted = newProgress >= requiredCount;
+    
+    // Create updated task
+    final updatedTask = DailyTask(
+      id: task.id,
+      type: task.type,
+      title: task.title,
+      description: task.description,
+      requiredCount: task.requiredCount,
+      progressCount: newProgress,
+      remainingCount: (requiredCount - newProgress).clamp(0, requiredCount),
+      points: task.points,
+      completed: isCompleted,
+      resetRule: task.resetRule,
+    );
+    
+    // Update the task list
+    tasks[taskIndex] = updatedTask;
+    tasks.refresh();
+    
+    Loggers.info('[PRO_CTRL] Updated task locally: progress=$newProgress, completed=$isCompleted');
+    
+    // Store in local storage for persistence
+    try {
+      final key = 'task_progress_${task.id}_${task.resetRule ?? 'daily'}';
+      _box.write(key, newProgress);
+      Loggers.info('[PRO_CTRL] Saved progress to local storage: $key = $newProgress');
+    } catch (e) {
+      Loggers.info('[PRO_CTRL] Failed to save to local storage: $e');
+    }
+  }
+
+  /// Load saved task progress from local storage
+  void _loadSavedTaskProgress() {
+    Loggers.info('[PRO_CTRL] _loadSavedTaskProgress called');
+    for (int i = 0; i < tasks.length; i++) {
+      final task = tasks[i];
+      if (task.id == null) continue;
+      
+      try {
+        final key = 'task_progress_${task.id}_${task.resetRule ?? 'daily'}';
+        final savedProgress = _box.read(key);
+        if (savedProgress != null && savedProgress is int) {
+          Loggers.info('[PRO_CTRL] Loaded saved progress for task ${task.id}: $savedProgress');
+          
+          final requiredCount = task.requiredCount ?? 1;
+          final isCompleted = savedProgress >= requiredCount;
+          
+          if (savedProgress != task.progressCount) {
+            tasks[i] = DailyTask(
+              id: task.id,
+              type: task.type,
+              title: task.title,
+              description: task.description,
+              requiredCount: task.requiredCount,
+              progressCount: savedProgress,
+              remainingCount: (requiredCount - savedProgress).clamp(0, requiredCount),
+              points: task.points,
+              completed: isCompleted,
+              resetRule: task.resetRule,
+            );
+          }
+        }
+      } catch (e) {
+        Loggers.info('[PRO_CTRL] Failed to load saved progress: $e');
+      }
+    }
+    tasks.refresh();
+  }
+
+  Future<void> refreshTasks() async {
+    Loggers.info('[PRO_CTRL] refreshTasks called');
+    try {
+      final s = await UserService.instance.professionalStats();
+      Loggers.info('[PRO_CTRL] refreshTasks - professionalStats response: status=${s.status}');
+      stats.value = s;
+      final dynamic raw = s.data?['daily_tasks'] ?? s.data?['dailyTasks'] ?? s.data?['tasks'];
+      Loggers.info('[PRO_CTRL] refreshTasks - raw tasks data: $raw');
+      dynamic list = raw;
+      if (raw is Map) {
+        list = raw['data'] ?? raw['list'] ?? raw['tasks'] ?? raw['daily_tasks'] ?? raw['dailyTasks'];
+      }
+      final daily = (list as List?)
+              ?.map((e) {
+                if (e is Map<String, dynamic>) return DailyTask.fromJson(e);
+                if (e is Map) return DailyTask.fromJson(e.cast<String, dynamic>());
+                return null;
+              })
+              .whereType<DailyTask>()
+              .toList() ??
+          <DailyTask>[];
+      Loggers.info('[PRO_CTRL] refreshTasks - parsed ${daily.length} tasks');
+      for (final t in daily) {
+        Loggers.info('[PRO_CTRL]   Task: id=${t.id}, type=${t.type}, completed=${t.completed}, progress=${t.progressCount}/${t.requiredCount}');
+      }
+      if (daily.isNotEmpty) {
+        tasks.assignAll(daily);
+        Loggers.info('[PRO_CTRL] refreshTasks - tasks updated');
+        return;
+      }
+    } catch (e) {
+      Loggers.info('[PRO_CTRL] refreshTasks - error in professionalStats: $e');
+      // ignore and fallback to dailyTasks
+    }
+
+    try {
+      Loggers.info('[PRO_CTRL] refreshTasks - falling back to dailyTasks()');
+      final t = await UserService.instance.dailyTasks();
+      Loggers.info('[PRO_CTRL] refreshTasks - dailyTasks response: status=${t.status}, count=${t.data?.length ?? 0}');
+      tasks.assignAll(t.data ?? <DailyTask>[]);
+    } catch (e) {
+      Loggers.info('[PRO_CTRL] refreshTasks - error in dailyTasks: $e');
+      tasks.assignAll(<DailyTask>[]);
+    }
+  }
+
+  Future<StatusModel> enableProfessional({required String type, String? name}) async {
+    final res = await UserService.instance.enableProfessional(type: type, professionalName: name);
+    if (res.status == true) {
+      localProfessionalEnabled.value = true;
+      try {
+        final uid = SessionManager.instance.getUserID();
+        if (uid > 0) {
+          await FirebaseFirestoreController.instance.db
+              .collection('app_users')
+              .doc('$uid')
+              .set(
+            {
+              'professional_type': type.trim().toLowerCase(),
+              'professional_enabled': 1,
+            },
+            SetOptions(merge: true),
+          );
+        }
+      } catch (_) {}
+      await fetchAll();
+    }
+    return res;
+  }
+
+  Future<StatusModel> submitMonetization(Map<String, dynamic> data) async {
+    final res = await UserService.instance.submitMonetizationRequest(data: data);
+    if (res.status == true) {
+      monetizationSubmittedLocal.value = true;
+      try {
+        _box.write(_monetizationSubmittedKey, true);
+      } catch (_) {}
+    }
+    await fetchAll();
+
+    // Some backends may mistakenly return status:false even though they create the request.
+    // If dashboard now shows pending, treat it as submitted.
+    if (res.status != true && (stats.value?.monetizationStatus == 'pending')) {
+      monetizationSubmittedLocal.value = true;
+      try {
+        _box.write(_monetizationSubmittedKey, true);
+      } catch (_) {}
+    }
+    return res;
+  }
+
+  Future<StatusModel> submitMonetizationMultipart(
+      Map<String, dynamic> data, Map<String, List<XFile?>> files) async {
+    final res = await UserService.instance.submitMonetizationRequestMultipart(
+      data: data,
+      files: files,
+    );
+    if (res.status == true) {
+      monetizationSubmittedLocal.value = true;
+      try {
+        _box.write(_monetizationSubmittedKey, true);
+      } catch (_) {}
+    }
+    await fetchAll();
+
+    // Some backends may mistakenly return status:false even though they create the request.
+    // If dashboard now shows pending, treat it as submitted.
+    if (res.status != true && (stats.value?.monetizationStatus == 'pending')) {
+      monetizationSubmittedLocal.value = true;
+      try {
+        _box.write(_monetizationSubmittedKey, true);
+      } catch (_) {}
+    }
+    return res;
+  }
+
+  Future<StatusModel> disableProfessional() async {
+    // Optimistically update UI immediately
+    localProfessionalEnabled.value = false;
+    try {
+      final res = await UserService.instance.disableProfessional();
+      // Try to refresh dashboard state (may include professional_off_at for cooldown)
+      try {
+        final s = await UserService.instance.professionalStats();
+        if (s.data != null) {
+          stats.value = s;
+        }
+        final backendEnabled = s.professionalEnabled;
+        localProfessionalEnabled.value = backendEnabled;
+        final dynamic raw = s.data?['daily_tasks'] ?? s.data?['dailyTasks'] ?? s.data?['tasks'];
+        dynamic list = raw;
+        if (raw is Map) {
+          list = raw['data'] ?? raw['list'] ?? raw['tasks'] ?? raw['daily_tasks'] ?? raw['dailyTasks'];
+        }
+        final daily = (list as List?)
+                ?.map((e) {
+                  if (e is Map<String, dynamic>) return DailyTask.fromJson(e);
+                  if (e is Map) return DailyTask.fromJson(e.cast<String, dynamic>());
+                  return null;
+                })
+                .whereType<DailyTask>()
+                .toList() ??
+            <DailyTask>[];
+        tasks.assignAll(daily);
+      } catch (_) {
+        // Keep localProfessionalEnabled false if refresh fails
+      }
+      return res;
+    } catch (e) {
+      // If request fails, try to restore based on last known stats
+      final backendEnabled = stats.value?.professionalEnabled;
+      if (backendEnabled != null) {
+        localProfessionalEnabled.value = backendEnabled;
+      }
+      rethrow;
+    }
+  }
+}

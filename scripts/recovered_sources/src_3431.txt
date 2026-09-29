@@ -1,0 +1,381 @@
+eEfile:///E:/flutterapp_pro/lib/screen/reels_screen/reel/reel_page.dart≤îimport 'package:figma_squircle_updated/figma_squircle.dart';
+import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:get/get.dart';
+import 'package:shortzz/common/service/api/post_service.dart';
+import 'package:shortzz/common/widget/black_gradient_shadow.dart';
+import 'package:shortzz/common/widget/double_tap_detector.dart';
+import 'package:shortzz/common/extensions/string_extension.dart';
+import 'package:shortzz/model/post_story/post_by_id.dart';
+import 'package:shortzz/model/post_story/post_model.dart';
+import 'package:shortzz/screen/reels_screen/reel/reel_page_controller.dart';
+import 'package:shortzz/screen/reels_screen/reel/widget/reel_animation_like.dart';
+import 'package:shortzz/screen/reels_screen/reel/widget/reel_seek_bar.dart';
+import 'package:shortzz/screen/reels_screen/reel/widget/side_bar_list.dart';
+import 'package:shortzz/screen/reels_screen/reel/widget/user_information.dart';
+import 'package:shortzz/utilities/asset_res.dart';
+import 'package:shortzz/utilities/theme_res.dart';
+import 'package:video_player/video_player.dart';
+import 'package:visibility_detector/visibility_detector.dart';
+
+class ReelPage extends StatelessWidget {
+  final Post reelData;
+  final VideoPlayerController? videoPlayerController;
+  final GlobalKey likeKey;
+  final PostByIdData? postByIdData;
+  final bool isFromChat;
+
+  const ReelPage(
+      {super.key,
+      required this.reelData,
+      this.videoPlayerController,
+      required this.likeKey,
+      this.postByIdData,
+      this.isFromChat = false});
+
+  @override
+  Widget build(BuildContext context) {
+    ReelController controller;
+    final pt = reelData.postType;
+    final bool isVideo = pt == PostType.reel || pt == PostType.video;
+    if (Get.isRegistered<ReelController>(tag: '${reelData.id}')) {
+      controller = Get.find<ReelController>(tag: '${reelData.id}');
+      // Delay update until after current frame to ensure proper UI update without conflicts
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!isFromChat) {
+          controller.updateReelData(reel: reelData);
+        }
+        // REMOVED: Don't enable comments here - let _startWatchGate handle it after 15 sec
+        // controller.setCommentEnabled(reelData.canComment == 1);
+        controller.notifyCommentSheet(postByIdData);
+      });
+    } else {
+      controller = Get.put(ReelController(reelData.obs), tag: '${reelData.id}');
+      // REMOVED: Don't enable comments here - let _startWatchGate handle it after 15 sec
+      // controller.setCommentEnabled(reelData.canComment == 1);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        controller.notifyCommentSheet(postByIdData);
+      });
+    }
+
+    Widget buildThumbnail() {
+      final thumb = (reelData.getThumbnail).trim();
+      final url = thumb.isNotEmpty ? thumb.addBaseURL() : '';
+      if (url.isEmpty) {
+        return Container(color: Colors.black);
+      }
+      return SizedBox.expand(
+        child: Image.network(
+          url,
+          fit: BoxFit.cover,
+          errorBuilder: (context, error, stackTrace) => Container(color: Colors.black),
+          loadingBuilder: (context, child, loadingProgress) {
+            if (loadingProgress == null) return child;
+            return Container(color: Colors.black);
+          },
+        ),
+      );
+    }
+
+    Widget buildVideoContent() {
+      if (!isVideo) {
+        return buildThumbnail();
+      }
+      final vc = videoPlayerController;
+      if (vc == null) {
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            buildThumbnail(),
+            const Center(
+              child: CupertinoActivityIndicator(radius: 12, color: Colors.white),
+            ),
+          ],
+        );
+      }
+
+      return ValueListenableBuilder(
+        valueListenable: vc,
+        builder: (context, value, child) {
+          if (value.hasError) {
+            return const Center(
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: 24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.error_outline, color: Colors.white, size: 32),
+                    SizedBox(height: 8),
+                    Text(
+                      'Unable to play video',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      'Swipe to see the next one',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }
+          if (!value.isInitialized || value.isBuffering) {
+            return Stack(
+              fit: StackFit.expand,
+              children: [
+                buildThumbnail(),
+                const Center(
+                  child: CupertinoActivityIndicator(radius: 12, color: Colors.white),
+                ),
+              ],
+            );
+          }
+
+          final size = value.size;
+          final w = (size.width > 0) ? size.width : 1.0;
+          final h = (size.height > 0) ? size.height : 1.0;
+          final double videoRatio = w / h;
+
+          // Smart Aspect Ratio Handling
+          // > 0.65 means the video is wider (like 4:5, 1:1, 16:9). We use fitWidth to avoid cropping sides.
+          // <= 0.65 means the video is tall (like 9:16). We use cover to fill the screen for immersive feel.
+          final BoxFit fit = videoRatio > 0.65 ? BoxFit.fitWidth : BoxFit.cover;
+
+          return RepaintBoundary(
+            child: ClipRRect(
+              child: SizedBox.expand(
+                child: FittedBox(
+                  fit: fit,
+                  child: SizedBox(
+                    width: w,
+                    height: h,
+                    child: VideoPlayer(vc),
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    }
+
+    Widget buildPlayPauseOverlay(VideoPlayerController? controller) {
+      if (controller == null) {
+        return const SizedBox();
+      }
+      return ValueListenableBuilder(
+        valueListenable: controller,
+        builder: (context, value, child) {
+          // Don't show play button during initialization or buffering
+          if (!value.isInitialized || value.isBuffering) {
+            return const SizedBox();
+          }
+          // Only show play button when explicitly paused by user and not playing
+          // Hide overlay during normal playback
+          if (value.isPlaying) {
+            return const SizedBox();
+          }
+          // Show play button when paused
+          return AnimatedOpacity(
+            duration: const Duration(milliseconds: 150),
+            opacity: 1.0,
+            child: Align(
+              alignment: Alignment.center,
+              child: ClipRRect(
+                borderRadius: SmoothBorderRadius(
+                  cornerRadius: 30,
+                  cornerSmoothing: 1,
+                ),
+                child: Container(
+                    height: 60,
+                    width: 60,
+                    decoration: BoxDecoration(
+                        color: blackPure(context).withValues(alpha: 0.5),
+                        shape: BoxShape.circle),
+                    alignment: Alignment.center,
+                    child: Image.asset(
+                        AssetRes.icPlay,
+                        width: 35,
+                        height: 35,
+                        color: bgGrey(context))),
+              ),
+            ),
+          );
+        },
+      );
+    }
+
+    void togglePlayPause() {
+      if (!isVideo) {
+        return;
+      }
+      final controllerValue = videoPlayerController?.value;
+      if (controllerValue == null) {
+        return;
+      }
+
+      if (controllerValue.isPlaying) {
+        videoPlayerController?.pause();
+      } else {
+        videoPlayerController?.play();
+      }
+    }
+
+    void handleVisibilityChanged(VisibilityInfo info) {
+      if (!isVideo) return;
+      final vc = videoPlayerController;
+      if (vc == null || !vc.value.isInitialized) return;
+      
+      final visibleFraction = info.visibleFraction;
+      
+      // Fully visible - ensure playing
+      if (visibleFraction > 0.9) {
+        if (!vc.value.isPlaying) {
+          vc.setVolume(1);
+          vc.setLooping(true);
+          vc.play();
+        }
+      } 
+      // Partially visible - mute but keep ready
+      else if (visibleFraction > 0.1) {
+        vc.setVolume(0);
+        if (!vc.value.isPlaying) {
+          vc.setLooping(true);
+          vc.play();
+        }
+      }
+      // Hidden - pause
+      else {
+        vc.setVolume(0);
+        vc.pause();
+      }
+    }
+
+    Rx<TapDownDetails?> details = Rx(null);
+
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.light.copyWith(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.light,
+        statusBarBrightness: Brightness.dark,
+      ),
+      child: Scaffold(
+        backgroundColor: blackPure(context),
+        resizeToAvoidBottomInset: false,
+        body: SafeArea(
+          top: true,
+          bottom: false,
+          child: VisibilityDetector(
+            key: ValueKey('reel-${reelData.id ?? reelData.video ?? ''}'),
+            onVisibilityChanged: handleVisibilityChanged,
+            child: DoubleTapDetector(
+              onDoubleTap: (value) {
+                if (details.value != null) return;
+                details.value = value;
+              },
+              child: InkWell(
+                onTap: () {
+                  FocusManager.instance.primaryFocus?.unfocus();
+                  togglePlayPause();
+                },
+                child: Stack(
+                  alignment: Alignment.bottomCenter,
+                  children: [
+                    buildVideoContent(),
+                    const BlackGradientShadow(),
+                    ReelInfoSection(
+                        controller: controller,
+                        likeKey: likeKey,
+                        videoPlayerPlusController: videoPlayerController,
+                        showSeekBar: isVideo),
+                    if (isVideo) buildPlayPauseOverlay(videoPlayerController),
+                    Obx(() {
+                      if (details.value == null) {
+                        return const SizedBox();
+                      }
+                      return ReelAnimationLike(
+                        likeKey: likeKey,
+                        position: details.value!.globalPosition,
+                        size: const Size(50, 50),
+                        leftRightPosition: 8,
+                        onLikeCall: () {
+                          if (controller.reelData.value.isLiked == true) return;
+                          if (!controller.isLikeEnabled.value) {
+                            controller.showLikeLockedMessage();
+                            return;
+                          }
+                          controller.onLikeTap();
+                        },
+                        onCompleteAnimation: () {
+                          details.value = null;
+                        },
+                      );
+                    })
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class ReelInfoSection extends StatelessWidget {
+  final ReelController controller;
+  final GlobalKey likeKey;
+  final VideoPlayerController? videoPlayerPlusController;
+  final bool showSeekBar;
+
+  const ReelInfoSection(
+      {super.key,
+      required this.controller,
+      required this.likeKey,
+      required this.videoPlayerPlusController,
+      this.showSeekBar = true});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.end,
+      children: [
+        ReelInfoRow(controller: controller, likeKey: likeKey),
+        if (showSeekBar)
+          ReelSeekBar(
+              videoController: videoPlayerPlusController,
+              controller: controller),
+      ],
+    );
+  }
+}
+
+class ReelInfoRow extends StatelessWidget {
+  final ReelController controller;
+  final GlobalKey likeKey;
+
+  const ReelInfoRow(
+      {super.key, required this.controller, required this.likeKey});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Expanded(child: UserInformation(controller: controller)),
+        SideBarList(controller: controller, likeKey: likeKey),
+      ],
+    );
+  }
+}
+Å~

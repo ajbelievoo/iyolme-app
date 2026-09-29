@@ -1,0 +1,240 @@
+rxJfile:///E:/flutterapp_pro/lib/screen/ads_manager/tab/ads_earnings_tab.dart Cimport 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:shortzz/common/manager/session_manager.dart';
+import 'package:shortzz/common/controller/professional_controller.dart';
+import 'package:shortzz/screen/ads_manager/widget/ads_empty_state.dart';
+import 'package:shortzz/screen/earnings_history_screen/earnings_history_screen.dart';
+import 'package:shortzz/model/user_model/user_model.dart';
+import 'package:shortzz/screen/professional_dashboard_screen/monetization_page.dart';
+import 'package:shortzz/screen/request_withdrawal_screen/request_withdrawal_screen.dart';
+import 'package:shortzz/screen/withdrawals_screen/withdrawals_screen.dart';
+
+class AdsEarningsTab extends StatelessWidget {
+  const AdsEarningsTab({super.key});
+
+  Widget _actionTile({
+    required BuildContext context,
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+    bool primary = false,
+  }) {
+    final bg = primary
+        ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.08)
+        : Theme.of(context).colorScheme.surface;
+
+    return Material(
+      color: bg,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: Theme.of(context).dividerColor.withValues(alpha: 0.5),
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                height: 42,
+                width: 42,
+                decoration: BoxDecoration(
+                  color:
+                      Theme.of(context).colorScheme.primary.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context)
+                            .textTheme
+                            .bodySmall
+                            ?.color
+                            ?.withValues(alpha: 0.75),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(
+                Icons.chevron_right,
+                color: Theme.of(context)
+                    .textTheme
+                    .bodySmall
+                    ?.color
+                    ?.withValues(alpha: 0.7),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final User? user = SessionManager.instance.getUser();
+    final canView = user?.hasPermission('earnings_view') == true;
+    if (!canView) {
+      return ListView(
+        padding: const EdgeInsets.all(16),
+        children: const [
+          AdsEmptyState(
+            title: 'Earnings locked',
+            subtitle: 'You do not have permission to view earnings.',
+            icon: Icons.lock_outline,
+          ),
+        ],
+      );
+    }
+
+    final controller = Get.isRegistered<ProfessionalController>()
+        ? Get.find<ProfessionalController>()
+        : Get.put(ProfessionalController());
+
+    return Obx(() {
+      final status = (controller.stats.value?.monetizationStatus ?? '').trim();
+      final lower = status.toLowerCase();
+      final approved = lower == 'approved';
+
+      if (!approved) {
+        String title;
+        String subtitle;
+        IconData icon;
+        Widget? action;
+
+        if (lower == 'pending' || controller.monetizationSubmittedLocal.value) {
+          title = 'Monetization under review';
+          subtitle = 'Creator earnings will be available after approval.';
+          icon = Icons.hourglass_top_rounded;
+          action = OutlinedButton.icon(
+            onPressed: () {
+              Get.to(() => const MonetizationPage(), preventDuplicates: false);
+            },
+            icon: const Icon(Icons.open_in_new),
+            label: const Text('View status'),
+          );
+        } else if (lower == 'rejected') {
+          title = 'Monetization rejected';
+          subtitle = 'Re-apply from Monetization page after meeting targets.';
+          icon = Icons.error_outline;
+          action = ElevatedButton.icon(
+            onPressed: () {
+              Get.to(() => const MonetizationPage(), preventDuplicates: false);
+            },
+            icon: const Icon(Icons.monetization_on_outlined),
+            label: const Text('Open Monetization'),
+          );
+        } else {
+          title = 'Creator earnings locked';
+          subtitle = 'Apply for monetization to unlock earnings and history.';
+          icon = Icons.lock_outline;
+          action = ElevatedButton.icon(
+            onPressed: () {
+              Get.to(() => const MonetizationPage(), preventDuplicates: false);
+            },
+            icon: const Icon(Icons.monetization_on_outlined),
+            label: const Text('Apply'),
+          );
+        }
+
+        return ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            AdsEmptyState(
+              title: title,
+              subtitle: subtitle,
+              icon: icon,
+              action: action,
+            ),
+          ],
+        );
+      }
+
+      return ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          AdsEmptyState(
+            title: 'Creator earnings',
+            subtitle: 'View your earnings summary and transaction history.',
+            icon: Icons.monetization_on_outlined,
+            action: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const SizedBox(height: 6),
+                const Text(
+                  'Quick actions',
+                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
+                ),
+                const SizedBox(height: 10),
+                _actionTile(
+                  context: context,
+                  icon: Icons.receipt_long_outlined,
+                  title: 'Earnings history',
+                  subtitle: 'All earnings & transactions',
+                  primary: true,
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const EarningsHistoryScreen(),
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(height: 10),
+                _actionTile(
+                  context: context,
+                  icon: Icons.account_balance_wallet_outlined,
+                  title: 'Withdrawals',
+                  subtitle: 'Track your withdrawal requests',
+                  onTap: () {
+                    Get.to(
+                      () => const WithdrawalsScreen(),
+                      preventDuplicates: false,
+                    );
+                  },
+                ),
+                const SizedBox(height: 10),
+                _actionTile(
+                  context: context,
+                  icon: Icons.payments_outlined,
+                  title: 'Request withdrawal',
+                  subtitle: 'Cash out your available balance',
+                  onTap: () {
+                    Get.to(
+                      () => const RequestWithdrawalScreen(),
+                      preventDuplicates: false,
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+    });
+  }
+}
+€ñ

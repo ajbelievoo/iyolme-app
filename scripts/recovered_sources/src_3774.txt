@@ -1,0 +1,15 @@
+„¿„…kfile:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/webrtc_interface-1.5.1/lib/src/navigator.dartèimport 'media_stream.dart';
+import 'mediadevices.dart';
+
+abstract class Navigator {
+  @Deprecated('use mediadevice.getUserMedia() instead')
+  Future<MediaStream> getUserMedia(Map<String, dynamic> mediaConstraints);
+
+  @Deprecated('use mediadevice.getDisplayMedia() instead')
+  Future<MediaStream> getDisplayMedia(Map<String, dynamic> mediaConstraints);
+
+  @Deprecated('use mediadevice.enumerateDevices() instead')
+  Future<List<dynamic>> getSources();
+
+  MediaDevices get mediaDevices;
+}

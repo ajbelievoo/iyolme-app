@@ -1,0 +1,237 @@
+Efile:///E:/flutterapp_pro/lib/common/service/api/billing_service.dartŸ"import 'package:shortzz/common/service/api/api_service.dart';
+import 'package:shortzz/common/service/utils/params.dart';
+import 'package:shortzz/common/service/utils/web_service.dart';
+import 'package:shortzz/model/billing/razorpay_create_order_model.dart';
+import 'package:shortzz/model/billing/cashfree_create_order_model.dart';
+import 'package:shortzz/model/billing/paypal_create_order_model.dart';
+import 'package:shortzz/model/billing/stripe_create_order_model.dart';
+import 'package:shortzz/common/manager/session_manager.dart';
+
+class BillingService {
+  BillingService._();
+
+  static final BillingService instance = BillingService._();
+
+  Future<RazorpayCreateOrderModel> createRazorpayOrder({
+    required String purpose, // subscription | coins
+    int? planId,
+    int? coinPackageId,
+    dynamic amount, // changed to dynamic to support double/int
+    String? currency,
+  }) async {
+    final param = <String, dynamic>{
+      Params.purpose: purpose,
+      Params.planId: planId,
+      Params.coinPackageId: coinPackageId,
+      Params.amount: amount,
+      Params.currency: currency,
+    };
+
+    final candidates = <String>{
+      WebService.billing
+          .createRazorpayOrder, // ${apiURL}billing/razorpay/create-order
+      // Common backend variants
+      WebService.billing.createRazorpayOrder
+          .replaceAll('create-order', 'create_order'),
+      WebService.billing.createRazorpayOrder
+          .replaceAll('create-order', 'createOrder'),
+      WebService.billing.createRazorpayOrder.replaceAll(
+          'billing/razorpay/create-order', 'billing/razorpay/create_order'),
+    }.toList();
+
+    Object? lastError;
+    String? lastUrl;
+    for (final url in candidates) {
+      try {
+        lastUrl = url;
+        final RazorpayCreateOrderModel response =
+            await ApiService.instance.call(
+          url: url,
+          param: Map<String, dynamic>.from(param),
+          fromJson: RazorpayCreateOrderModel.fromJson,
+          cancelAuthToken: false,
+        );
+        return response;
+      } catch (e) {
+        lastError = e;
+      }
+    }
+
+    throw Exception(
+      'URL Error: ${lastUrl ?? ''} - ${lastError?.toString() ?? 'Failed to create Razorpay order'}',
+    );
+  }
+
+  Future<CashfreeCreateOrderModel> createCashfreeOrder({
+    required String purpose,
+    int? planId,
+    int? coinPackageId,
+    dynamic amount, // changed to dynamic
+    String? currency,
+  }) async {
+    final param = <String, dynamic>{
+      Params.purpose: purpose,
+      Params.planId: planId,
+      Params.coinPackageId: coinPackageId,
+      Params.amount: amount,
+      Params.currency: currency,
+    };
+
+    // If currency is INR, remove decimal points for Cashfree (it might expect integer paise or just strict double)
+    // Cashfree expects amount like 100.00 or 100
+    // But backend might be failing due to customer details missing.
+    // Let's add user details to params if available.
+    final user = SessionManager.instance.getUser();
+    if (user != null) {
+      param['customer_name'] = user.fullname ?? user.username ?? 'User';
+      param['customer_email'] = user.userEmail ?? 'user@example.com';
+      param['customer_phone'] =
+          (user.userMobileNo ?? '9999999999').replaceAll(RegExp(r'\D'), '');
+      if (param['customer_phone'].toString().length > 10) {
+        param['customer_phone'] =
+            param['customer_phone'].toString().substring(0, 10);
+      }
+      if (param['customer_phone'].toString().length < 10) {
+        param['customer_phone'] = '9999999999';
+      }
+      param['customer_id'] = user.id.toString();
+    }
+
+    // Avoid forcing SANDBOX based on build mode.
+    // Prefer the backend/source-of-truth configuration (settings.cashfreeEndpoint).
+    // If endpoint hints production/sandbox, pass it through; otherwise omit and let backend decide.
+    final endpoint =
+        SessionManager.instance.getSettings()?.cashfreeEndpoint?.toLowerCase();
+    if (endpoint != null && endpoint.trim().isNotEmpty) {
+      if (endpoint.contains('api.cashfree.com') || endpoint.contains('production')) {
+        param['environment'] = 'PRODUCTION';
+      } else if (endpoint.contains('sandbox')) {
+        param['environment'] = 'SANDBOX';
+      }
+    }
+
+    // Generate unique order_id from app side to ensure uniqueness
+    if (!param.containsKey('order_id')) {
+      param['order_id'] =
+          'ORDER_${DateTime.now().millisecondsSinceEpoch}_${user?.id ?? "0"}';
+    }
+
+    // Ensure amount is at least 1.0 for Cashfree
+    if (amount is num && amount < 1.0) {
+      param['amount'] = 1.0;
+    } else if (amount is String) {
+      try {
+        final doubleAmount = double.parse(amount);
+        if (doubleAmount < 1.0) {
+          param['amount'] = 1.0;
+        }
+      } catch (_) {}
+    }
+
+    final url = WebService.billing.createCashfreeOrder;
+    try {
+      final CashfreeCreateOrderModel response =
+          await ApiService.instance.call(
+        url: url,
+        param: Map<String, dynamic>.from(param),
+        fromJson: CashfreeCreateOrderModel.fromJson,
+        cancelAuthToken: false,
+      );
+      return response;
+    } catch (e) {
+      throw Exception('Failed to create Cashfree order: $e');
+    }
+  }
+
+  Future<PaypalCreateOrderModel> createPaypalOrder({
+    required String purpose,
+    int? planId,
+    int? coinPackageId,
+    dynamic amount, // changed to dynamic
+    String? currency,
+  }) async {
+    final param = <String, dynamic>{
+      Params.purpose: purpose,
+      Params.planId: planId,
+      Params.coinPackageId: coinPackageId,
+      Params.amount: amount,
+      Params.currency: currency,
+    };
+
+    final base = WebService.billing.createPaypalOrder;
+    final candidates = <String>{
+      base,
+      base.replaceAll('create-order', 'create_order'),
+      base.replaceAll('create-order', 'createOrder'),
+
+      // Common backend variants: paypal is sometimes served under `misc/` instead of `billing/`.
+      base.replaceAll('billing/paypal/', 'misc/paypal/'),
+      base
+          .replaceAll('billing/paypal/', 'misc/paypal/')
+          .replaceAll('create-order', 'create_order'),
+      base
+          .replaceAll('billing/paypal/', 'misc/paypal/')
+          .replaceAll('create-order', 'createOrder'),
+
+      // Some backends omit the module prefix.
+      base.replaceAll('billing/paypal/', 'paypal/'),
+      base
+          .replaceAll('billing/paypal/', 'paypal/')
+          .replaceAll('create-order', 'create_order'),
+      base
+          .replaceAll('billing/paypal/', 'paypal/')
+          .replaceAll('create-order', 'createOrder'),
+    }.toList();
+
+    Object? lastError;
+    String? lastUrl;
+    for (final url in candidates) {
+      try {
+        lastUrl = url;
+        final PaypalCreateOrderModel response = await ApiService.instance.call(
+          url: url,
+          param: Map<String, dynamic>.from(param),
+          fromJson: PaypalCreateOrderModel.fromJson,
+          cancelAuthToken: false,
+        );
+        return response;
+      } catch (e) {
+        lastError = e;
+      }
+    }
+
+    throw Exception(
+      'URL Error: ${lastUrl ?? ''} - ${lastError?.toString() ?? 'Failed to create Paypal order'}',
+    );
+  }
+
+  Future<StripeCreateOrderModel> createStripeOrder({
+    required String purpose,
+    int? planId,
+    int? coinPackageId,
+    dynamic amount, // changed to dynamic
+    String? currency,
+  }) async {
+    final param = <String, dynamic>{
+      Params.purpose: purpose,
+      Params.planId: planId,
+      Params.coinPackageId: coinPackageId,
+      Params.amount: amount,
+      Params.currency: currency,
+    };
+
+    final url = WebService.billing.createStripeOrder;
+    try {
+      final StripeCreateOrderModel response = await ApiService.instance.call(
+        url: url,
+        param: Map<String, dynamic>.from(param),
+        fromJson: StripeCreateOrderModel.fromJson,
+        cancelAuthToken: false,
+      );
+      return response;
+    } catch (e) {
+      throw Exception('Failed to create Stripe order: $e');
+    }
+  }
+}
+€î

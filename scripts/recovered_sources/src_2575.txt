@@ -1,0 +1,15 @@
+|file:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/petitparser-7.0.2/lib/src/parser/character/predicate/word.dart–import '../predicate.dart';
+
+class WordCharPredicate extends CharacterPredicate {
+  const WordCharPredicate();
+
+  @override
+  bool test(int charCode) =>
+      (65 <= charCode && charCode <= 90) ||
+      (97 <= charCode && charCode <= 122) ||
+      (48 <= charCode && charCode <= 57) ||
+      identical(charCode, 95);
+
+  @override
+  bool isEqualTo(CharacterPredicate other) => other is WordCharPredicate;
+}

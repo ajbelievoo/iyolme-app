@@ -1,0 +1,94 @@
+jÌQfile:///E:/flutterapp_pro/lib/screen/ads_manager/widget/ads_wallet_hero_card.dartŠÎimport 'package:flutter/material.dart';
+import 'package:shortzz/utilities/theme_res.dart';
+
+class AdsWalletHeroCard extends StatelessWidget {
+  const AdsWalletHeroCard({
+    super.key,
+    required this.balance,
+    this.currencySymbol = r'$ ',
+    this.onAddMoney,
+  });
+
+  final num balance;
+  final String currencySymbol;
+  final VoidCallback? onAddMoney;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = themeAccentSolid(context);
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            accent.withValues(alpha: 0.18),
+            accent.withValues(alpha: 0.06),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: accent.withValues(alpha: 0.25),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Wallet balance',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: textLightGrey(context),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '$currencySymbol${balance.toStringAsFixed(2)}',
+                  style: TextStyle(
+                    fontSize: 26,
+                    fontWeight: FontWeight.w900,
+                    color: textDarkGrey(context),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Use balance to start campaigns instantly.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: textLightGrey(context),
+                    height: 1.2,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          SizedBox(
+            height: 42,
+            child: ElevatedButton.icon(
+              onPressed: onAddMoney,
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text(
+                'Add',
+                style: TextStyle(fontWeight: FontWeight.w800),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: accent,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+_

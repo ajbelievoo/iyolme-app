@@ -1,0 +1,31 @@
+<package:flutter_cashfree_pg_sdk/api/cfcard/cfcardwidget.dart	Ü8ÖYÜ:Ü<Ü>ÜAÜCÜGÜIÄãfile:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_cashfree_pg_sdk-2.3.2+49/lib/api/cferrorresponse/cferrorresponse.dartÅ class CFErrorResponse {
+
+  String? _status;
+  String? _message;
+  String? _code;
+  String? _type;
+
+  CFErrorResponse(String? status, String? message, String? code, String? type) {
+    _status = status;
+    _code = code;
+    _type = type;
+    _message = message;
+  }
+
+  String? getStatus() {
+    return _status;
+  }
+
+  String? getMessage() {
+    return _message;
+  }
+
+  String? getCode() {
+    return _code;
+  }
+
+  String? getType() {
+    return _type;
+  }
+
+} 

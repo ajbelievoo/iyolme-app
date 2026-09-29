@@ -1,0 +1,14 @@
+xfile:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/pointycastle-4.0.0/lib/src/api/parameters_with_random.dartÅ’// See file LICENSE for more information.
+
+part of '../../api.dart';
+
+//TODO consider mixin
+/// [CipherParameters] consisting of an underlying [CipherParameters] (of type
+/// [UnderlyingParameters]) and an acompanying [SecureRandom].
+class ParametersWithRandom<UnderlyingParameters extends CipherParameters>
+    implements CipherParameters {
+  final UnderlyingParameters parameters;
+  final SecureRandom random;
+
+  ParametersWithRandom(this.parameters, this.random);
+}

@@ -1,0 +1,96 @@
+import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:shortzz/screen/profile_screen/profile_screen_controller.dart';
+import 'package:shortzz/utilities/asset_res.dart';
+import 'package:shortzz/utilities/theme_res.dart';
+
+class ProfileTabs extends StatelessWidget {
+  final ProfileScreenController controller;
+
+  const ProfileTabs({super.key, required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Obx(
+          () => Stack(
+            children: [
+              Container(height: .5, color: textLightGrey(context)),
+              AnimatedAlign(
+                alignment: controller.selectedTabIndex.value == 0
+                    ? AlignmentDirectional.centerStart
+                    : controller.selectedTabIndex.value == 1
+                        ? const Alignment(-0.33, 0)
+                        : controller.selectedTabIndex.value == 2
+                            ? const Alignment(0.33, 0)
+                            : AlignmentDirectional.centerEnd,
+                duration: const Duration(milliseconds: 300),
+                child: Container(
+                  height: 1,
+                  width: Get.width / 4 - 45, // Adjusted width for 4 tabs
+                  color: themeAccentSolid(context),
+                  margin: const EdgeInsets.symmetric(horizontal: 30),
+                ),
+              ),
+            ],
+          ),
+        ),
+        TabBar(
+            onTap: (value) {
+              controller.userData.value?.checkIsBlocked(() {
+                controller.onTabChanged(value);
+                controller.pageController.animateToPage(value,
+                    duration: const Duration(milliseconds: 300),
+                    curve: Curves.linear);
+              });
+            },
+            indicatorColor: Colors.transparent,
+            tabs: List.generate(4, (index) {
+              // Increased to 4 for Drafts
+              final icon = index == 0
+                  ? AssetRes.icPost
+                  : index == 1
+                      ? AssetRes.icReel
+                      : index == 2
+                          ? AssetRes.icGift
+                          : AssetRes
+                              .icPost; // Fallback to post icon if draft icon missing, logic below handles it
+
+              // Handle Draft Icon separately if needed or reuse existing
+              Widget iconWidget;
+              if (index == 3) {
+                iconWidget = Icon(Icons.drafts,
+                    color: controller.selectedTabIndex.value == index
+                        ? themeAccentSolid(context)
+                        : disableGrey(context),
+                    size: 30);
+              } else {
+                final color = controller.selectedTabIndex.value == index
+                    ? themeAccentSolid(context)
+                    : disableGrey(context);
+                iconWidget =
+                    Image.asset(icon, height: 50, width: 35, color: color);
+              }
+
+              return Obx(() {
+                // Re-evaluate color inside Obx
+                if (index == 3) {
+                  return Icon(Icons.drafts,
+                      color: controller.selectedTabIndex.value == index
+                          ? themeAccentSolid(context)
+                          : disableGrey(context),
+                      size: 30);
+                }
+                final color = controller.selectedTabIndex.value == index
+                    ? themeAccentSolid(context)
+                    : disableGrey(context);
+                return Image.asset(icon, height: 50, width: 35, color: color);
+              });
+            })),
+        Container(height: .5, color: textLightGrey(context)),
+      ],
+    );
+  }
+}
+a

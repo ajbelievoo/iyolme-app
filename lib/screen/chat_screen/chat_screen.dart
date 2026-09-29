@@ -1,0 +1,52 @@
+import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:shortzz/common/manager/session_manager.dart';
+import 'package:shortzz/model/chat/chat_thread.dart';
+import 'package:shortzz/model/user_model/user_model.dart';
+import 'package:shortzz/screen/chat_screen/chat_screen_controller.dart';
+import 'package:shortzz/screen/chat_screen/widget/chat_bottom_action_view.dart';
+import 'package:shortzz/screen/chat_screen/widget/chat_center_message_view.dart';
+import 'package:shortzz/screen/chat_screen/widget/chat_top_profile_view.dart';
+import 'package:shortzz/utilities/theme_res.dart';
+
+class ChatScreen extends StatelessWidget {
+  final ChatThread conversationUser;
+  final User? user;
+  final bool? autoCallIsAudio;
+
+  const ChatScreen(
+      {super.key, required this.conversationUser, this.user, this.autoCallIsAudio});
+
+  @override
+  Widget build(BuildContext context) {
+    final controller =
+        Get.put(ChatScreenController(conversationUser.obs, autoCallIsAudio: autoCallIsAudio),
+        tag: '${conversationUser.conversationId}');
+    return Scaffold(
+      backgroundColor: scaffoldBackgroundColor(context),
+      body: Stack(
+        children: [
+          Obx(() {
+            final url = SessionManager.instance.activeChatThemeBackgroundUrl.value.trim();
+            if (url.isEmpty) return const SizedBox.shrink();
+            return Positioned.fill(
+              child: CachedNetworkImage(
+                imageUrl: url,
+                fit: BoxFit.cover,
+              ),
+            );
+          }),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ChatTopProfileView(controller: controller),
+              ChatMessageView(controller: controller),
+              ChatBottomActionView(controller: controller)
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}

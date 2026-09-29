@@ -1,0 +1,352 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:shortzz/common/controller/base_controller.dart';
+import 'package:shortzz/common/controller/professional_controller.dart';
+import 'package:shortzz/common/extensions/user_extension.dart';
+import 'package:shortzz/common/manager/logger.dart';
+import 'package:shortzz/common/manager/session_manager.dart';
+import 'package:shortzz/common/service/api/config_service.dart';
+import 'package:shortzz/common/service/api/livekit_service.dart';
+import 'package:shortzz/common/service/api/user_service.dart';
+import 'package:shortzz/languages/languages_keys.dart';
+import 'package:shortzz/model/general/settings_model.dart';
+import 'package:shortzz/model/livestream/app_user.dart';
+import 'package:shortzz/model/livestream/livestream.dart';
+import 'package:shortzz/model/livestream/livestream_user_state.dart';
+import 'package:shortzz/model/user_model/user_model.dart';
+import 'package:shortzz/screen/live_stream/livekit/livekit_host_screen.dart';
+import 'package:shortzz/utilities/firebase_const.dart';
+
+class CreateLiveStreamScreenController extends BaseController {
+  RxBool isRestricted = false.obs;
+  bool isFrontCamera = true;
+  FirebaseFirestore db = FirebaseFirestore.instance;
+  String _resolvedLiveProvider = 'livekit';
+
+  Rx<User?> get myUser => SessionManager.instance.getUser().obs;
+
+  Setting? get _setting => SessionManager.instance.getSettings();
+  Rx<Widget?> localView = Rx(null);
+  RxInt localViewID = RxInt(-1);
+  TextEditingController titleController = TextEditingController();
+
+  @override
+  void onInit() {
+    super.onInit();
+    _bootstrapProvider();
+  }
+
+  String _rawProTypeFromStats(dynamic stats) {
+    try {
+      final Map<String, dynamic>? data = (stats as dynamic).data as Map<String, dynamic>?;
+      if (data == null) return '';
+      dynamic raw = data['professional_type'] ??
+          data['type'] ??
+          data['professionalType'] ??
+          data['dashboard_type'] ??
+          data['user_type'] ??
+          data['userType'];
+      if (raw == null) {
+        final u = data['user'];
+        if (u is Map) {
+          raw = u['professional_type'] ?? u['type'] ?? u['user_type'] ?? u['userType'] ?? u['dashboard_type'];
+        }
+      }
+      if (raw == null) {
+        final p = data['profile'];
+        if (p is Map) {
+          raw = p['professional_type'] ?? p['type'] ?? p['user_type'] ?? p['userType'] ?? p['dashboard_type'];
+        }
+      }
+      return '${raw ?? ''}'.trim().toLowerCase();
+    } catch (_) {
+      return '';
+    }
+  }
+
+  Future<bool> _isProfessionalEnabledForLive() async {
+    try {
+      if (Get.isRegistered<ProfessionalController>()) {
+        final pc = Get.find<ProfessionalController>();
+        final s = pc.stats.value;
+        final t = _rawProTypeFromStats(s);
+        if (t.isNotEmpty) return s?.professionalEnabled == true;
+      }
+    } catch (_) {}
+
+    try {
+      final s = await UserService.instance.professionalStats();
+      final t = _rawProTypeFromStats(s);
+      if (t.isEmpty) return false;
+      return s.professionalEnabled;
+    } catch (_) {
+      // Strict: if we cannot verify, do not allow starting a live.
+      return false;
+    }
+  }
+
+  Future<void> _fillProfessionalFields(AppUser u) async {
+    try {
+      if (Get.isRegistered<ProfessionalController>()) {
+        final pc = Get.find<ProfessionalController>();
+        final s = pc.stats.value;
+        final t = _rawProTypeFromStats(s);
+        if (t.isNotEmpty) {
+          u.professionalType = t;
+        }
+        if (s != null) {
+          u.professionalEnabled = s.professionalEnabled ? 1 : 0;
+        }
+      }
+    } catch (_) {}
+
+    if ((u.professionalType ?? '').trim().isNotEmpty && u.professionalEnabled != null) {
+      return;
+    }
+
+    try {
+      final s = await UserService.instance.professionalStats();
+      final t = _rawProTypeFromStats(s);
+      if (t.isNotEmpty) {
+        u.professionalType = t;
+      }
+      u.professionalEnabled = s.professionalEnabled ? 1 : 0;
+    } catch (_) {}
+  }
+
+
+  Future<void> _bootstrapProvider() async {
+    try {
+      _resolvedLiveProvider =
+          await ConfigService.instance.getLiveProvider(forceRefresh: true);
+    } catch (e) {
+      Loggers.error('[CONFIG] resolve live provider failed: $e');
+      _resolvedLiveProvider = 'livekit';
+    }
+
+    if (_resolvedLiveProvider.isEmpty) {
+      _resolvedLiveProvider = (_setting?.liveProvider ?? '').trim().toLowerCase();
+    }
+
+    if (_resolvedLiveProvider.isEmpty) {
+      _resolvedLiveProvider = 'livekit';
+    }
+  }
+
+  Future<bool> requestPermission() async {
+    Loggers.info("requestPermission...");
+    try {
+      PermissionStatus microphoneStatus = await Permission.microphone.request();
+      if (microphoneStatus != PermissionStatus.granted) {
+        Loggers.error(
+            'Error: Microphone permission not granted: ${microphoneStatus.name}');
+        return false;
+      }
+    } on Exception catch (error) {
+      Loggers.error("[ERROR], request microphone permission exception, $error");
+      return false;
+    }
+
+    try {
+      PermissionStatus cameraStatus = await Permission.camera.request();
+      if (cameraStatus != PermissionStatus.granted) {
+        Loggers.error(
+            '[Error]: Camera permission not granted: ${cameraStatus.name}');
+        return false;
+      }
+    } on Exception catch (error) {
+      Loggers.error("[ERROR], request camera permission exception, $error");
+      return false;
+    }
+
+    return true;
+  }
+
+  void toggleCamera() {
+    return;
+  }
+
+  void onCloseTap() {
+    Get.back();
+  }
+
+  Future<void> stopPreview() async {
+    localViewID.value = -1;
+    localView.value = null;
+    return;
+  }
+
+  Future<void> onStartLive() async {
+    final okPro = await _isProfessionalEnabledForLive();
+    if (!okPro) {
+      showSnackBar('Please enable Professional Mode first');
+      return;
+    }
+    var provider = await ConfigService.instance.getLiveProvider(forceRefresh: true);
+    if (provider.isEmpty) {
+      provider = (_setting?.liveProvider ?? '').trim().toLowerCase();
+    }
+    if (provider.isEmpty) {
+      provider = 'livekit';
+    }
+    _resolvedLiveProvider = provider;
+    if (provider == 'livekit') {
+      final user = myUser.value;
+      final userId = user?.id ?? -1;
+      if (user == null || userId <= 0) {
+        showSnackBar('User not found');
+        return;
+      }
+
+      try {
+        final existingSnap = await db
+            .collection(FirebaseConst.liveStreams)
+            .doc('$userId')
+            .get();
+        if (existingSnap.exists) {
+          final data = existingSnap.data();
+          if (data is Map<String, dynamic>) {
+            await _resumeLiveKitLive(Livestream.fromJson(data), user: user);
+            return;
+          }
+        }
+      } catch (_) {}
+
+      await _startLiveKitLive();
+      return;
+    }
+    
+    // Default to LiveKit if unknown or previously Agora
+    await _startLiveKitLive();
+    return;
+  }
+
+  Future<void> _startLiveKitLive() async {
+    final setting = _setting;
+    final wsUrl = (setting?.livekitWsUrl ?? '').trim();
+    if (wsUrl.isEmpty) {
+      showSnackBar('LiveKit is selected but not configured');
+      return;
+    }
+
+    if (titleController.text.trim().isEmpty) {
+      showSnackBar(LKey.enterLiveStreamTitle.tr);
+      return;
+    }
+
+    final user = myUser.value;
+    final userId = user?.id ?? -1;
+    if (user == null || userId <= 0) {
+      showSnackBar('User not found');
+      return;
+    }
+
+    final time = DateTime.now().millisecondsSinceEpoch;
+    final livestream = user.livestream(
+      type: LivestreamType.livestream,
+      time: time,
+      description: titleController.text.trim(),
+      restrictToJoin: isRestricted.value ? 1 : 0,
+      hostViewId: -1,
+    );
+
+    final livestreamUser = user.appUser;
+
+    await _fillProfessionalFields(livestreamUser);
+    final livestreamUserState =
+        user.streamState(time: time, stateType: LivestreamUserType.host);
+
+    final roomName = userId.toString();
+    final identity = userId.toString();
+    final name = (user.username ?? user.fullname ?? '').toString();
+
+    showLoader();
+    try {
+      final tokenResp = await LiveKitService.instance.generateToken(
+        roomName: roomName,
+        userIdentity: identity,
+        userName: name,
+      );
+
+      if (tokenResp == null || tokenResp.token.trim().isEmpty) {
+        showSnackBar('Failed to generate LiveKit token');
+        return;
+      }
+
+      final livestreamRef =
+          db.collection(FirebaseConst.liveStreams).doc('$userId');
+      final usersRef = db.collection(FirebaseConst.appUsers).doc('$userId');
+      final userStateRef =
+          livestreamRef.collection(FirebaseConst.userState).doc('$userId');
+
+      final batch = db.batch();
+      batch.set(livestreamRef, livestream.toJson());
+      // Merge to avoid wiping professional_type/professional_enabled and other profile fields.
+      batch.set(usersRef, livestreamUser.toJson(), SetOptions(merge: true));
+      batch.set(userStateRef, livestreamUserState.toJson());
+      await batch.commit();
+
+      final t = tokenResp.token.trim();
+      final masked = t.length <= 16 ? '***' : '${t.substring(0, 8)}...${t.substring(t.length - 6)}';
+      Loggers.info('[LIVEKIT] token generated room=${tokenResp.roomName} url=${tokenResp.livekitUrl} token=$masked');
+
+      Get.off(() => LiveKitHostScreen(
+            livestream: livestream,
+            url: tokenResp.livekitUrl.isNotEmpty ? tokenResp.livekitUrl : wsUrl,
+            token: tokenResp.token,
+          ));
+    } catch (e) {
+      Loggers.error('[LIVEKIT] generate token failed: $e');
+      showSnackBar('LiveKit token error');
+    } finally {
+      stopLoader();
+    }
+  }
+
+  Future<void> _resumeLiveKitLive(Livestream existing, {required User user}) async {
+    final setting = _setting;
+    final wsUrl = (setting?.livekitWsUrl ?? '').trim();
+    if (wsUrl.isEmpty) {
+      showSnackBar('LiveKit is selected but not configured');
+      return;
+    }
+
+    final userId = user.id ?? -1;
+    if (userId <= 0) {
+      showSnackBar('User not found');
+      return;
+    }
+
+    final roomName = (existing.roomID ?? existing.hostId?.toString() ?? userId.toString()).trim();
+    if (roomName.isEmpty) {
+      showSnackBar('Invalid live room');
+      return;
+    }
+
+    showLoader();
+    try {
+      final tokenResp = await LiveKitService.instance.generateToken(
+        roomName: roomName,
+        userIdentity: userId.toString(),
+        userName: (user.username ?? user.fullname ?? '').toString(),
+      );
+
+      if (tokenResp == null || tokenResp.token.trim().isEmpty) {
+        showSnackBar('Failed to generate LiveKit token');
+        return;
+      }
+
+      Get.off(() => LiveKitHostScreen(
+            livestream: existing,
+            url: tokenResp.livekitUrl.isNotEmpty ? tokenResp.livekitUrl : wsUrl,
+            token: tokenResp.token,
+          ));
+    } catch (_) {
+      showSnackBar('LiveKit token error');
+    } finally {
+      stopLoader();
+    }
+  }
+}

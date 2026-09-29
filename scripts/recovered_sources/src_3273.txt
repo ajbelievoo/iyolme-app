@@ -1,0 +1,626 @@
+Umimport 'dart:io';
+
+import 'package:figma_squircle_updated/figma_squircle.dart';
+import 'package:flutter/gestures.dart';
+import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:vector_math/vector_math_64.dart' as v;
+import 'package:video_player/video_player.dart';
+import 'package:shortzz/common/manager/haptic_manager.dart';
+import 'package:shortzz/common/widget/confirmation_dialog.dart';
+import 'package:shortzz/screen/hashtag_screen/hashtag_screen.dart';
+import 'package:shortzz/languages/languages_keys.dart';
+import 'package:shortzz/screen/camera_edit_screen/camera_edit_screen_controller.dart';
+import 'package:shortzz/screen/camera_edit_screen/text_story/story_text_view_controller.dart';
+import 'package:shortzz/screen/camera_edit_screen/text_story/widget/text_editor_sheet.dart';
+import 'package:shortzz/screen/camera_screen/camera_screen_controller.dart';
+import 'package:shortzz/utilities/app_res.dart';
+import 'package:shortzz/utilities/text_style_custom.dart';
+import 'package:shortzz/utilities/theme_res.dart';
+
+class CameraEditImageView extends StatelessWidget {
+  final CameraEditScreenController cameraEditController;
+
+  const CameraEditImageView({super.key, required this.cameraEditController});
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = Get.put(StoryTextViewController(cameraEditController));
+    return Obx(
+      () {
+        // Retrieve the selected background style once to avoid repetitive computation
+        PostStoryContent content = cameraEditController.content.value;
+        bool isTextStory = content.type == PostStoryContentType.storyText;
+        var gradient = cameraEditController
+            .storyGradientColor[cameraEditController.selectedBgIndex.value];
+        List<double> filter = cameraEditController.selectedFilter.value;
+
+        return Container(
+          decoration: ShapeDecoration(
+            shape: SmoothRectangleBorder(
+                borderRadius:
+                    SmoothBorderRadius(cornerRadius: 10, cornerSmoothing: 1)),
+          ),
+          child: RepaintBoundary(
+            key: controller.previewContainer,
+            child: Stack(
+              children: [
+                GestureDetector(
+                  onHorizontalDragEnd: (details) {
+                    final dx = details.velocity.pixelsPerSecond.dx;
+                    if (dx.abs() < 120) return;
+                    if (dx < 0) {
+                      cameraEditController.nextFilter();
+                    } else {
+                      cameraEditController.prevFilter();
+                    }
+                  },
+                  child: ColorFiltered(
+                    colorFilter: ColorFilter.matrix(filter),
+                    child: Container(
+                      width: MediaQuery.of(context).size.width,
+                      height: MediaQuery.of(context).size.height,
+                      decoration: ShapeDecoration(
+                        shape: SmoothRectangleBorder(
+                            borderRadius: SmoothBorderRadius(
+                                cornerRadius: 10, cornerSmoothing: 1)),
+                        // color: content.bgColor,
+                        gradient: isTextStory ? gradient : content.bgGradient,
+                      ),
+                      child: ClipSmoothRect(
+                        radius: SmoothBorderRadius(
+                            cornerRadius: 10, cornerSmoothing: 1),
+                        child: Stack(
+                          children: [
+                            if (content.type == PostStoryContentType.storyImage)
+                              Align(
+                                  alignment: Alignment.center,
+                                  child: Image.file(File(content.content ?? ''),
+                                      width: double.infinity,
+                                      fit: BoxFit.fitWidth)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                ...controller.imageStickers.asMap().map(
+                  (i, element) {
+                    return MapEntry(
+                      i,
+                      DraggableImageStickerWidget(
+                        data: element,
+                        onUpdate: (updated) =>
+                            controller.updateImageSticker(i, updated),
+                        onDelete: () => controller.deleteImageSticker(i),
+                      ),
+                    );
+                  },
+                ).values,
+                Obx(() {
+                  final videoCtrl =
+                      cameraEditController.videoPlayerController.value;
+
+                  // Capture dependencies for Obx to track
+                  final allClips = cameraEditController.textClips.toList();
+                  final content = cameraEditController.content.value;
+                  final type = content.type;
+                  final isVideoType = [
+                    PostStoryContentType.reel,
+                    PostStoryContentType.storyVideo,
+                  ].contains(type);
+
+                  // Common visibility logic function
+                  bool checkVisibility(TextWidgetData element, int currentMs) {
+                    if (!isVideoType) return true;
+                    final clip =
+                        allClips.firstWhereOrNull((c) => c.id == element.id);
+                    if (clip != null) {
+                      final start = clip.startMs;
+                      final end = start + clip.durationMs;
+                      return currentMs >= start && currentMs < end;
+                    }
+                    // If clip is missing in video mode, hide it to prevent overlap
+                    return false;
+                  }
+
+                  if (videoCtrl == null) {
+                    final currentMs = cameraEditController.currentPositionMs;
+                    return Stack(
+                      children:
+                          controller.textWidgets.asMap().entries.map((entry) {
+                        final isVisible =
+                            checkVisibility(entry.value, currentMs);
+                        if (!isVisible) return const SizedBox();
+
+                        return DraggableTextWidget(
+                          data: entry.value,
+                          onUpdate: (updatedData) => controller
+                              .updateTextWidget(entry.key, updatedData),
+                          onDelete: () =>
+                              controller.deleteTextWidget(entry.key),
+                        );
+                      }).toList(),
+                    );
+                  }
+
+                  return ValueListenableBuilder(
+                    valueListenable: videoCtrl,
+                    builder: (context, VideoPlayerValue value, child) {
+                      final currentMs = value.position.inMilliseconds;
+                      return Stack(
+                        children:
+                            controller.textWidgets.asMap().entries.map((entry) {
+                          final i = entry.key;
+                          final element = entry.value;
+
+                          // Check visibility based on timeline clip
+                          final isVisible = checkVisibility(element, currentMs);
+
+                          if (!isVisible) return const SizedBox();
+
+                          return DraggableTextWidget(
+                            data: element,
+                            onUpdate: (updatedData) =>
+                                controller.updateTextWidget(i, updatedData),
+                            onDelete: () => controller.deleteTextWidget(i),
+                          );
+                        }).toList(),
+                      );
+                    },
+                  );
+                }),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class DraggableImageStickerWidget extends StatefulWidget {
+  final ImageStickerData data;
+  final Function(ImageStickerData updatedData) onUpdate;
+  final VoidCallback onDelete;
+
+  const DraggableImageStickerWidget({
+    super.key,
+    required this.data,
+    required this.onUpdate,
+    required this.onDelete,
+  });
+
+  @override
+  State<DraggableImageStickerWidget> createState() =>
+      _DraggableImageStickerWidgetState();
+}
+
+class _DraggableImageStickerWidgetState
+    extends State<DraggableImageStickerWidget> {
+  bool _isViewVisible = true;
+
+  double _initialScale = 1.0;
+  double _initialAngle = 0.0;
+  Offset _initialFocalPoint = Offset.zero;
+  Offset _initialPosition = Offset.zero;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_isViewVisible) return const SizedBox();
+
+    final d = widget.data;
+    return Positioned(
+      top: d.top,
+      left: d.left,
+      child: GestureDetector(
+        onTap: () {
+          Get.bottomSheet(
+            ConfirmationSheet(
+              title: LKey.deleteMessageTitle.tr,
+              description: LKey.deleteMessageDescription.tr,
+              onTap: () {
+                Get.back();
+                widget.onDelete();
+              },
+            ),
+          );
+        },
+        onLongPress: () async {
+          try {
+            HapticManager.shared.light();
+          } catch (_) {}
+          setState(() {
+            _isViewVisible = false;
+          });
+          Get.bottomSheet(
+            ConfirmationSheet(
+              title: LKey.deleteMessageTitle.tr,
+              description: LKey.deleteMessageDescription.tr,
+              onTap: () {
+                Get.back();
+                widget.onDelete();
+              },
+            ),
+          ).whenComplete(() {
+            if (mounted) {
+              setState(() {
+                _isViewVisible = true;
+              });
+            }
+          });
+        },
+        onScaleStart: (details) {
+          _initialScale = d.scale;
+          _initialAngle = d.angle;
+          _initialFocalPoint = details.focalPoint;
+          _initialPosition = Offset(d.left, d.top);
+        },
+        onScaleUpdate: (details) {
+          final delta = details.focalPoint - _initialFocalPoint;
+          final nextLeft = _initialPosition.dx + delta.dx;
+          final nextTop = _initialPosition.dy + delta.dy;
+          final nextScale = (_initialScale * details.scale).clamp(0.25, 6.0);
+          final nextAngle = _initialAngle + details.rotation;
+          widget.onUpdate(
+            d.copyWith(
+              left: nextLeft,
+              top: nextTop,
+              scale: nextScale,
+              angle: nextAngle,
+            ),
+          );
+        },
+        child: Transform(
+          alignment: Alignment.center,
+          transform: Matrix4.identity()
+            ..rotateZ(d.angle)
+            ..scale(d.scale),
+          child: Container(
+            width: 120,
+            height: 120,
+            decoration: BoxDecoration(
+              color: Colors.transparent,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: Image.network(
+              d.url,
+              fit: BoxFit.contain,
+              errorBuilder: (_, __, ___) {
+                return Container(
+                  color: blackPure(context).withValues(alpha: 0.2),
+                  alignment: Alignment.center,
+                  child: Text(
+                    'Sticker',
+                    style: TextStyleCustom.outFitRegular400(
+                      color: whitePure(context),
+                      fontSize: 12,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class DraggableTextWidget extends StatefulWidget {
+  final TextWidgetData data;
+  final Function(TextWidgetData updatedData) onUpdate;
+  final VoidCallback onDelete;
+
+  const DraggableTextWidget({
+    super.key,
+    required this.data,
+    required this.onUpdate,
+    required this.onDelete,
+  });
+
+  @override
+  State<DraggableTextWidget> createState() => _DraggableTextWidgetState();
+}
+
+class _DraggableTextWidgetState extends State<DraggableTextWidget> {
+  double _baseFontScale = 1.0;
+  double _initialRotationAngle =
+      0.0; // Initial rotation angle when scaling starts
+  Offset _initialFocalPoint = Offset.zero; // Initial focal point for panning
+  Offset _initialPosition =
+      Offset.zero; // Position of the text when scaling starts
+  final _controller = Get.find<StoryTextViewController>();
+  bool _isViewVisible = true;
+
+  void onScaleStart(ScaleStartDetails details) {
+    setState(() {
+      _baseFontScale = widget.data.fontScale;
+      _initialFocalPoint = details.focalPoint;
+      _initialPosition = Offset(widget.data.left, widget.data.top);
+      _initialRotationAngle = widget.data.fontAngle;
+    });
+  }
+
+  void onScaleUpdate(ScaleUpdateDetails details) {
+    setState(() {
+      // Update position (panning)
+      final Offset delta = details.focalPoint - _initialFocalPoint;
+      double leftX = _initialPosition.dx + delta.dx;
+      double topY = _initialPosition.dy + delta.dy;
+
+      // Update font scale (scaling)
+      double fontScale = (_baseFontScale * details.scale).clamp(0.2, 100);
+
+      // Update rotation angle
+      double rotationAngle = _initialRotationAngle + details.rotation;
+
+      // Notify parent of changes
+      widget.onUpdate(TextWidgetData(
+          text: widget.data.text,
+          top: topY,
+          left: leftX,
+          fontSize: widget.data.fontSize,
+          fontScale: fontScale,
+          fontAngle: rotationAngle,
+          fontColor: widget.data.fontColor,
+          fontAlign: widget.data.fontAlign,
+          googleFontFamily: widget.data.googleFontFamily,
+          opacity: widget.data.opacity));
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      left: widget.data.left,
+      top: widget.data.top,
+      child: GestureDetector(
+        onDoubleTap: openTextEditor,
+        onLongPress: () {
+          HapticManager.shared.light();
+          Get.bottomSheet(ConfirmationSheet(
+            title: LKey.delete.tr,
+            description: LKey.deleteTextConfirmation.tr,
+            onTap: widget.onDelete,
+          ));
+        },
+        onScaleStart: onScaleStart,
+        onScaleUpdate: onScaleUpdate,
+        child: Transform(
+          alignment: Alignment.center,
+          transform: Matrix4.identity()
+            ..rotateZ(widget.data.fontAngle)
+            ..scaleByVector3(v.Vector3(
+              widget.data.fontScale,
+              widget.data.fontScale,
+              1.0,
+            )),
+          child: Container(
+            width: Get.width - 50,
+            color: Colors.transparent,
+            constraints: const BoxConstraints(minWidth: 100, minHeight: 50),
+            child: _isViewVisible
+                ? _buildAnnotatedText(context)
+                : const SizedBox(),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAnnotatedText(BuildContext context) {
+    final raw = widget.data.text;
+    if (raw.trimLeft().startsWith('__loc__:')) {
+      final title = raw.trimLeft().replaceFirst('__loc__:', '').trim();
+      final display = title.isEmpty ? 'LOCATION' : title.toUpperCase();
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.place_rounded,
+                size: 18, color: themeAccentSolid(context)),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                display,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyleCustom.unboundedMedium500(
+                  color: themeAccentSolid(context),
+                  fontSize: (widget.data.fontSize).clamp(16, 28),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (raw.trimLeft().startsWith('__qst__:')) {
+      final q = raw.trimLeft().replaceFirst('__qst__:', '').trim();
+      return Container(
+        width: 260,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              q.isEmpty ? 'Ask me a question' : q,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyleCustom.unboundedMedium500(
+                color: Colors.black,
+                fontSize: (widget.data.fontSize).clamp(14, 22),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Container(
+              height: 40,
+              alignment: Alignment.centerLeft,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: Colors.black.withAlpha(18),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                'Type your answer',
+                style: TextStyleCustom.outFitRegular400(
+                  color: Colors.black.withAlpha(130),
+                  fontSize: 13,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (raw.trimLeft().startsWith('__qrep__:')) {
+      final payload = raw.trimLeft().replaceFirst('__qrep__:', '').trim();
+      final parts = payload.split('|');
+      final who = parts.isNotEmpty ? parts[0].trim() : '';
+      final ans = parts.length > 1 ? parts.sublist(1).join('|').trim() : '';
+      return Container(
+        width: 260,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (who.isNotEmpty)
+              Text(
+                who,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyleCustom.unboundedMedium500(
+                  color: Colors.black.withAlpha(170),
+                  fontSize: 13,
+                ),
+              ),
+            if (who.isNotEmpty) const SizedBox(height: 6),
+            Text(
+              ans.isEmpty ? 'Reply' : ans,
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyleCustom.unboundedMedium500(
+                color: Colors.black,
+                fontSize: (widget.data.fontSize).clamp(14, 20),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    final baseStyle = _getTextStyle(
+      widget.data.googleFontFamily,
+      widget.data.fontSize,
+      widget.data.fontColor,
+      widget.data.opacity,
+    );
+    final mentionStyle = baseStyle.copyWith(
+      color: blueFollow(context),
+      fontWeight: FontWeight.w600,
+    );
+    final hashStyle = baseStyle.copyWith(
+      color: themeAccentSolid(context),
+      fontWeight: FontWeight.w600,
+    );
+
+    final spans = <InlineSpan>[];
+    final matches = AppRes.combinedRegex.allMatches(raw).toList();
+    int last = 0;
+    for (final m in matches) {
+      if (m.start > last) {
+        spans.add(
+            TextSpan(text: raw.substring(last, m.start), style: baseStyle));
+      }
+      final token = raw.substring(m.start, m.end);
+      if (token.startsWith('@')) {
+        spans.add(
+          TextSpan(
+            text: token,
+            style: mentionStyle,
+            recognizer: TapGestureRecognizer()
+              ..onTap = () {
+                _controller.openMentionProfile(token);
+              },
+          ),
+        );
+      } else if (token.startsWith('#')) {
+        spans.add(
+          TextSpan(
+            text: token,
+            style: hashStyle,
+            recognizer: TapGestureRecognizer()
+              ..onTap = () {
+                Get.to(
+                  () => HashtagScreen(hashtag: token, index: 1),
+                  preventDuplicates: false,
+                );
+              },
+          ),
+        );
+      } else {
+        spans.add(TextSpan(text: token, style: baseStyle));
+      }
+      last = m.end;
+    }
+    if (last < raw.length) {
+      spans.add(TextSpan(text: raw.substring(last), style: baseStyle));
+    }
+
+    return RichText(
+      textAlign: widget.data.fontAlign.align,
+      text: TextSpan(style: baseStyle, children: spans),
+    );
+  }
+
+  TextStyle _getTextStyle(
+      GoogleFontFamily? font, double fontSize, Color color, double opacity) {
+    return font?.style.copyWith(
+          fontSize: fontSize,
+          color: color.withValues(alpha: opacity),
+        ) ??
+        TextStyleCustom.outFitMedium500(
+            fontSize: fontSize, color: color, opacity: opacity);
+  }
+
+  void openTextEditor() {
+    _isViewVisible = false;
+    setState(() {});
+    Get.bottomSheet<TextWidgetData>(TextEditorSheet(data: widget.data),
+            isScrollControlled: true,
+            ignoreSafeArea: false,
+            // backgroundColor: textVeryLightGrey(context).withValues(alpha: 1),
+            enableDrag: false,
+            isDismissible: false,
+            // barrierColor: textVeryLightGrey(context).withValues(alpha: 1),
+            persistent: false)
+        .then((value) {
+      _isViewVisible = true;
+      setState(() {});
+      if (value != null) {
+        widget.onUpdate(value);
+        widget.onDelete();
+        _controller.textWidgets.add(value);
+      }
+    });
+  }
+}
+‚s

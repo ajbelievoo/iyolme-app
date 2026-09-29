@@ -1,0 +1,36 @@
+{file:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/get-4.7.3/lib/get_connect/http/src/exceptions/exceptions.dart‚Àclass GetHttpException implements Exception {
+  final String message;
+
+  final Uri? uri;
+
+  GetHttpException(this.message, [this.uri]);
+
+  @override
+  String toString() => message;
+}
+
+class GraphQLError {
+  GraphQLError({this.code, this.message});
+  final String? message;
+  final String? code;
+
+  @override
+  String toString() => 'GETCONNECT ERROR:\n\tcode:$code\n\tmessage:$message';
+}
+
+class UnauthorizedException implements Exception {
+  @override
+  String toString() {
+    return 'Operation Unauthorized';
+  }
+}
+
+class UnexpectedFormat implements Exception {
+  final String message;
+  UnexpectedFormat(this.message);
+  @override
+  String toString() {
+    return 'Unexpected format: $message';
+  }
+}
+%

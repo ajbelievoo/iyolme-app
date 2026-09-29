@@ -1,0 +1,2074 @@
+ýÃimport 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:archive/archive.dart';
+import 'package:deepar_flutter_plus/deepar_flutter_plus.dart';
+import 'package:deepar_flutter_plus/src/utils.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:get/get.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:just_audio/just_audio.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:retrytech_plugin/retrytech_plugin.dart';
+import 'package:shortzz/common/controller/base_controller.dart';
+import 'package:shortzz/common/extensions/string_extension.dart';
+import 'package:shortzz/common/functions/media_picker_helper.dart';
+import 'package:shortzz/common/manager/logger.dart';
+import 'package:shortzz/common/manager/session_manager.dart';
+import 'package:shortzz/common/service/api/common_service.dart';
+import 'package:shortzz/common/widget/confirmation_dialog.dart';
+import 'package:shortzz/languages/languages_keys.dart';
+import 'package:shortzz/model/general/settings_model.dart';
+import 'package:shortzz/screen/camera_edit_screen/camera_edit_screen.dart';
+import 'package:shortzz/screen/camera_screen/camera_screen.dart';
+import 'package:shortzz/screen/color_filter_screen/widget/color_filtered.dart';
+import 'package:shortzz/screen/music_sheet/music_sheet.dart';
+import 'package:shortzz/screen/selected_music_sheet/selected_music_sheet.dart';
+import 'package:shortzz/screen/selected_music_sheet/selected_music_sheet_controller.dart';
+import 'package:shortzz/utilities/app_res.dart';
+import 'package:shortzz/utilities/asset_res.dart';
+
+class CameraScreenController extends BaseController
+    with GetSingleTickerProviderStateMixin {
+  // Constants
+  static const _progressUpdateInterval = 10; // milliseconds
+  RxList<int> secondsList = AppRes.secondList.obs;
+
+  Future<List<String>> _listAssetKeys() async {
+    try {
+      final raw = await rootBundle.loadString('AssetManifest.json');
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return const <String>[];
+      return decoded.keys.map((e) => e.toString()).toList(growable: false);
+    } catch (_) {
+      return const <String>[];
+    }
+  }
+
+  // Dependencies
+  final CameraScreenType cameraType;
+  final AudioPlayer audioPlayer = AudioPlayer();
+  final Rx<DeepArControllerPlus> deepArControllerPlus =
+      DeepArControllerPlus().obs;
+  RxBool isSecondListShow = true.obs;
+
+  // State variables
+
+  RxInt selectedSecond = AppRes.secondList.first.obs;
+  RxBool isTorchOn = false.obs;
+  RxBool isRecording = false.obs;
+  RxBool isStartingRecording = false.obs;
+  RxBool isEffectShow = false.obs;
+  RxBool isBeautyShow = false.obs;
+  RxBool isMakeupShow = false.obs;
+  RxBool isTriggerShow = false.obs;
+  RxBool isCameraBooting = true.obs;
+  // Assume platform camera defaults to back; we force a flip once after init.
+  final RxBool isFrontCamera = false.obs;
+  bool _didForceDefaultFront = false;
+  Rx<SelectedMusic?> selectedMusic = Rx(null);
+  RxDouble progress = 0.0.obs;
+  RxBool isDeepARInitialized = false.obs;
+  final RxBool _useDeepArRuntime = false.obs;
+  bool _isDisposed = false;
+  int _effectRequestId = 0;
+
+  final List<String> _recordedChunks = [];
+  final List<double> _chunkDurations = [];
+  double _startProgress = 0.0;
+
+  Directory? _deepArEffectsBaseDir;
+
+  Setting? get appSetting => SessionManager.instance.getSettings();
+  late Rx<DeepARFilters> selectedEffect;
+
+  // Tools UI State
+  RxBool isToolsExpanded = false.obs;
+  RxBool isGestureControlEnabled = false.obs;
+  RxDouble recordingSpeed = 1.0.obs;
+  final List<double> _chunkSpeeds = [];
+
+  final RxInt gestureCountdown = 0.obs;
+  Timer? _gestureCountdownTimer;
+  bool _gestureCountdownRunning = false;
+  DateTime? _lastGestureToggleAt;
+
+  Timer? _zoomSmoothingTimer;
+  double _zoomTargetValue = 1.0;
+
+  DateTime? _lastNativeZoomAt;
+  double _lastNativeZoomValue = 1.0;
+
+  void onSpeedChange(double speed) {
+    recordingSpeed.value = speed;
+    _updateAudioSpeed();
+  }
+
+  void _updateAudioSpeed() {
+    if (selectedMusic.value == null) return;
+    double rate = 1.0;
+    if (recordingSpeed.value != 0.0) {
+      rate = 1.0 / recordingSpeed.value;
+    }
+    // Clamping to avoid audio artifacts or crashes
+    if (rate < 0.5) rate = 0.5;
+    if (rate > 2.0) rate = 2.0;
+
+    try {
+      audioPlayer.setSpeed(rate);
+    } catch (e) {
+      Loggers.error('Error setting audio speed: $e');
+    }
+  }
+
+  void onGestureToggle() {
+    final now = DateTime.now();
+    if (_lastGestureToggleAt != null &&
+        now.difference(_lastGestureToggleAt!).inMilliseconds < 400) {
+      return;
+    }
+    _lastGestureToggleAt = now;
+
+    final nextEnabled = !isGestureControlEnabled.value;
+    isGestureControlEnabled.value = nextEnabled;
+
+    if (useDeepAr && isDeepARInitialized.value) {
+      try {
+        deepArControllerPlus.value.setGestureMlEnabled(nextEnabled);
+        if (nextEnabled) {
+          _setupDeepArGestureListener();
+        }
+      } catch (_) {}
+    }
+
+    if (nextEnabled) {
+      _startGestureHintCycle();
+      Get.snackbar('Gesture Control', 'Show your palm to start recording',
+          snackPosition: SnackPosition.TOP,
+          backgroundColor: Colors.black54,
+          colorText: Colors.white);
+    } else {
+      _stopGestureHintCycle();
+      _cancelGestureCountdown();
+    }
+  }
+
+  final RxInt gestureHintIndex = 0.obs;
+  Timer? _gestureHintTimer;
+
+  void _startGestureHintCycle() {
+    _gestureHintTimer?.cancel();
+    gestureHintIndex.value = 0;
+    _gestureHintTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (_isDisposed) return;
+      if (!isGestureControlEnabled.value) return;
+      gestureHintIndex.value = (gestureHintIndex.value + 1) % 2;
+    });
+  }
+
+  void _stopGestureHintCycle() {
+    _gestureHintTimer?.cancel();
+    _gestureHintTimer = null;
+    gestureHintIndex.value = 0;
+  }
+
+  final RxDouble _currentZoom = 1.0.obs;
+  double _startZoom = 1.0;
+  double get maxZoom => 3.0; // Example max zoom
+  double get minZoom => 1.0;
+
+  bool _isRecordZoomDragging = false;
+  double _recordZoomAccumulatedDy = 0.0;
+
+  double get currentZoom => _currentZoom.value;
+
+  static const MethodChannel _retrytechChannel =
+      MethodChannel('retrytech_plugin');
+
+  StreamSubscription? _deepArGestureSub;
+
+  void _setupGestureChannelListener() {
+    try {
+      _retrytechChannel.setMethodCallHandler((call) async {
+        if (_isDisposed) return;
+        final m = (call.method).toString();
+        Loggers.info(
+            '[Gesture] native callback method=$m args=${call.arguments}');
+        final key = m.toLowerCase().replaceAll('_', '');
+        final isExplicitPalm =
+            key == 'onpalmdetected' || key == 'onpalmopen' || key == 'onpalm';
+        final isExplicitGesture = key == 'ongesturedetected' ||
+            key == 'ongesturedetect' ||
+            key == 'ongesture';
+
+        // Only allow explicit gesture callbacks on this legacy channel.
+        // DeepAR gesture events are consumed via deepArControllerPlus.gestureStream.
+        if (isExplicitPalm || isExplicitGesture) {
+          _onPalmDetectedFromNative();
+        }
+      });
+    } catch (_) {}
+  }
+
+  void _onPalmDetectedFromNative() {
+    Loggers.info(
+        '[Gesture] _onPalmDetectedFromNative enabled=${isGestureControlEnabled.value} type=$cameraType progress=${progress.value} selected=${selectedSecond.value} running=$_gestureCountdownRunning');
+    debugPrint(
+        '[Gesture] _onPalmDetectedFromNative enabled=${isGestureControlEnabled.value} type=$cameraType progress=${progress.value} selected=${selectedSecond.value} running=$_gestureCountdownRunning');
+    if (!isGestureControlEnabled.value) return;
+    if (cameraType != CameraScreenType.post) return;
+    if (progress.value >= selectedSecond.value) return;
+    if (_gestureCountdownRunning) return;
+
+    _startGestureCountdownAndAutoRecord();
+  }
+
+  void onGestureTriggerTap() {
+    // Intentionally no-op: gesture countdown should start only when native
+    // thumb/palm detection callback arrives.
+    return;
+  }
+
+  void _startGestureCountdownAndAutoRecord() {
+    _cancelGestureCountdown();
+    _gestureCountdownRunning = true;
+    gestureCountdown.value = 3;
+
+    _gestureCountdownTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (_isDisposed) {
+        t.cancel();
+        return;
+      }
+      final next = gestureCountdown.value - 1;
+      gestureCountdown.value = next;
+      if (next <= 0) {
+        t.cancel();
+        _gestureCountdownRunning = false;
+        if (!isGestureControlEnabled.value) return;
+        if (progress.value >= selectedSecond.value) return;
+        if (!isStartingRecording.value) {
+          onVideoRecordingStart();
+          return;
+        }
+        if (!isRecording.value) {
+          onVideoRecordingResume();
+        }
+      }
+    });
+  }
+
+  void _cancelGestureCountdown() {
+    _gestureCountdownTimer?.cancel();
+    _gestureCountdownTimer = null;
+    _gestureCountdownRunning = false;
+    gestureCountdown.value = 0;
+  }
+
+  void startRecordZoomDrag() {
+    _isRecordZoomDragging = true;
+    _zoomStartValue = _currentZoom.value;
+    _zoomTargetValue = _currentZoom.value;
+    _recordZoomAccumulatedDy = 0.0;
+    final msg =
+        '[ZoomDrag] start zoomStart=$_zoomStartValue isRecording=${isRecording.value} isStarting=${isStartingRecording.value} useDeepAr=$useDeepAr';
+    Loggers.info(msg);
+    debugPrint(msg);
+  }
+
+  void updateRecordZoomDrag(double dyDelta) {
+    if (!_isRecordZoomDragging) return;
+    if (!useDeepAr) return;
+
+    const double sensitivity = 0.01;
+    _recordZoomAccumulatedDy += dyDelta;
+    final newZoom = _zoomStartValue - (_recordZoomAccumulatedDy * sensitivity);
+    final msg =
+        '[ZoomDrag] move dyDelta=$dyDelta accumulated=$_recordZoomAccumulatedDy target=$newZoom current=${_currentZoom.value}';
+    Loggers.info(msg);
+    debugPrint(msg);
+    _setZoomTarget(newZoom);
+  }
+
+  void endRecordZoomDrag() {
+    _isRecordZoomDragging = false;
+    final msg =
+        '[ZoomDrag] end current=${_currentZoom.value} target=$_zoomTargetValue';
+    Loggers.info(msg);
+    debugPrint(msg);
+  }
+
+  void _setZoomTarget(double zoom) {
+    double clamped = zoom;
+    if (clamped < minZoom) clamped = minZoom;
+    if (clamped > maxZoom) clamped = maxZoom;
+    _zoomTargetValue = clamped;
+
+    _zoomSmoothingTimer ??= Timer.periodic(
+      const Duration(milliseconds: 50),  // Reduced from 16ms to 50ms to save battery
+      (t) {
+        if (_isDisposed) {
+          t.cancel();
+          _zoomSmoothingTimer = null;
+          return;
+        }
+        if (!isRecording.value &&
+            !isStartingRecording.value &&
+            !_isRecordZoomDragging) {
+          t.cancel();
+          _zoomSmoothingTimer = null;
+          return;
+        }
+
+        final current = _currentZoom.value;
+        final target = _zoomTargetValue;
+        final diff = (target - current).abs();
+
+        if (diff < 0.001) {
+          _applyZoom(target);
+          t.cancel();
+          _zoomSmoothingTimer = null;
+          return;
+        }
+
+        final next = current + (target - current) * 0.18;
+        _applyZoom(next);
+      },
+    );
+  }
+
+  void handleZoomUpdate(double dy) {
+    // Zoom logic for recording button drag
+    // dy is vertical distance from start (negative = up)
+    // Instagram: Drag UP to Zoom IN.
+
+    // Sensitivity: 100 pixels = 1.0 zoom factor change
+    const double sensitivity = 0.01;
+
+    // Use current zoom as base if not recording start?
+    // Actually, usually we zoom from the value at the start of the drag.
+    // But onLongPressMoveUpdate provides offset from origin (start of press).
+    // So we should use _zoomStartValue or current value at start of press.
+    // Since we don't capture "start of long press" zoom explicitly in a var for this method,
+    // we can assume _startZoom (set on recording start) or just use current.
+
+    // Better logic:
+    // If we are recording, we might have started at _startZoom.
+    // dy is -100 (up).
+    // newZoom = _startZoom - (-100 * 0.01) = _startZoom + 1.0.
+
+    double base = isRecording.value ? _startZoom : _currentZoom.value;
+    double newZoom = base - (dy * sensitivity);
+
+    _applyZoom(newZoom);
+  }
+
+  double _zoomGestureStartY = 0.0;
+  double _zoomStartValue = 1.0;
+
+  void onZoomGestureStart(DragStartDetails details) {
+    _zoomGestureStartY = details.globalPosition.dy;
+    _zoomStartValue = _currentZoom.value;
+  }
+
+  void onZoomGestureUpdate(DragUpdateDetails details) {
+    // Delta Y: negative when moving up (zoom in), positive when moving down (zoom out)
+    // Instagram: moving UP zooms IN.
+
+    // We can use delta or total distance.
+    // Let's use total distance from start for smoothness.
+    double currentY = details.globalPosition.dy;
+    double dy = currentY - _zoomGestureStartY;
+
+    // Moving UP (dy negative) -> Zoom IN
+    // Moving DOWN (dy positive) -> Zoom OUT
+
+    const double sensitivity = 0.01;
+    double newZoom = _zoomStartValue - (dy * sensitivity);
+
+    _applyZoom(newZoom);
+  }
+
+  void _applyZoom(double zoom) {
+    if (zoom < minZoom) zoom = minZoom;
+    if (zoom > maxZoom) zoom = maxZoom;
+
+    if (zoom != _currentZoom.value) {
+      _currentZoom.value = zoom;
+      final msg =
+          '[Zoom] apply zoom=$zoom useDeepAr=$useDeepAr deepArInit=${isDeepARInitialized.value}';
+      Loggers.info(msg);
+      debugPrint(msg);
+
+      if (useDeepAr && isDeepARInitialized.value) {
+        try {
+          final now = DateTime.now();
+          final shouldSend = _lastNativeZoomAt == null ||
+              now.difference(_lastNativeZoomAt!).inMilliseconds >= 50 ||
+              (zoom - _lastNativeZoomValue).abs() >= 0.04;
+
+          if (shouldSend) {
+            _lastNativeZoomAt = now;
+            _lastNativeZoomValue = zoom;
+            deepArControllerPlus.value.setZoom(zoom);
+          }
+        } catch (_) {}
+      } else {
+        try {
+          _retrytechChannel.invokeMethod('setZoom', {'zoom': zoom});
+          Loggers.info('[Zoom] setZoom=$zoom');
+        } catch (e) {
+          Loggers.error('Zoom error: $e');
+        }
+      }
+    }
+  }
+
+  Future<bool> onBackFromScreen() async {
+    final hasSession = isRecording.value ||
+        isStartingRecording.value ||
+        _recordedChunks.isNotEmpty ||
+        progress.value > 0;
+
+    if (hasSession) {
+      Get.bottomSheet(
+        Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          padding: const EdgeInsets.symmetric(vertical: 20),
+          child: SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Recording in progress',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                ListTile(
+                  leading: const Icon(Icons.exit_to_app, color: Colors.red),
+                  title: const Text('Exit Camera',
+                      style: TextStyle(color: Colors.red)),
+                  onTap: () {
+                    if (Get.isBottomSheetOpen ?? false) Get.back();
+                    _cleanupAndExit();
+                  },
+                ),
+                ListTile(
+                  leading:
+                      const Icon(Icons.delete_forever, color: Colors.orange),
+                  title: const Text('Discard Edits',
+                      style: TextStyle(color: Colors.orange)),
+                  onTap: () {
+                    if (Get.isBottomSheetOpen ?? false) Get.back();
+                    _resetAll();
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.play_arrow),
+                  title: const Text('Continue Recording'),
+                  onTap: () {
+                    if (Get.isBottomSheetOpen ?? false) Get.back();
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+        isScrollControlled: false,
+      );
+      return false;
+    }
+
+    Get.bottomSheet(
+      ConfirmationSheet(
+        title: 'Exit camera?',
+        description: 'Do you want to exit the camera?',
+        positiveText: 'Continue',
+        onTap: () {
+          _cleanupAndExit();
+        },
+      ),
+    );
+    return false;
+  }
+
+  void _cleanupAndExit() {
+    if (cameraType == CameraScreenType.post) {
+      // Cleanup chunks
+      for (var path in _recordedChunks) {
+        try {
+          File(path).delete();
+        } catch (_) {}
+      }
+      _recordedChunks.clear();
+      _chunkDurations.clear();
+      _chunkSpeeds.clear();
+    }
+    // Close the confirmation sheet first (if open), then exit the camera screen.
+    if (Get.isBottomSheetOpen ?? false) {
+      Get.back();
+    }
+    Get.back();
+  }
+
+  final RxDouble deepArSkinSmoothing = 0.0.obs;
+  final RxDouble deepArFaceMorphingEyeSize = 0.0.obs;
+  final RxDouble deepArFaceMorphingFaceShape = 0.0.obs;
+  final RxDouble deepArFaceMorphingNoseSize = 0.0.obs;
+  final RxDouble deepArFaceMorphingChinSize = 0.0.obs;
+  final RxDouble deepArFaceMorphingMouthPosition = 0.0.obs;
+  final RxDouble deepArMakeupLips = 0.0.obs;
+  final RxDouble deepArMakeupBlush = 0.0.obs;
+  final RxDouble deepArMakeupFoundation = 0.0.obs;
+  final RxDouble deepArMakeupEyeshadow = 0.0.obs;
+  final RxDouble deepArMakeupEyelashes = 0.0.obs;
+  final RxDouble deepArMakeupEyebrows = 0.0.obs;
+  final RxDouble deepArHairColorStrength = 0.0.obs;
+  final Rx<Color> deepArHairColor = Colors.black.obs;
+
+  Timer? _deepArBeautyDebounce;
+
+  bool get isDeepAr {
+    final provider = (appSetting?.activeArProvider ?? '').trim().toLowerCase();
+    if (provider.isNotEmpty) {
+      final viaProvider = provider == 'deepar' || provider == 'deep_ar';
+      Loggers.info(
+          '[AR] isDeepAr decision via active_ar_provider=$provider => $viaProvider');
+      return viaProvider;
+    }
+
+    final engine = (appSetting?.cameraEngine ?? '').trim().toLowerCase();
+    if (engine.isNotEmpty) {
+      final viaEngine = engine == 'deep_ar';
+      Loggers.info(
+          '[AR] isDeepAr decision via camera_engine=$engine => $viaEngine');
+      return viaEngine;
+    }
+
+    final legacyFlag = appSetting?.isDeepAr == 1;
+    Loggers.info(
+        '[AR] isDeepAr decision via legacy isDeepAr=${appSetting?.isDeepAr} (arManagerEnabled=${appSetting?.arManagerEnabled}) => $legacyFlag');
+    return legacyFlag;
+  }
+
+  bool get useDeepAr => _useDeepArRuntime.value;
+
+  // Private variables
+  Timer? _progressTimer;
+  Timer? _effectDebounceTimer;
+  Completer<void>? _cameraOperationCompleter;
+
+  CameraScreenController(this.cameraType, this.selectedMusic);
+
+  @override
+  void onInit() {
+    super.onInit();
+    _setupGestureChannelListener();
+    _initialize();
+    selectedEffect =
+        Rx(DeepARFilters(id: -1, title: 'None', image: AssetRes.icNoFilter));
+  }
+
+  void _setupDeepArGestureListener() {
+    _deepArGestureSub?.cancel();
+    _deepArGestureSub = null;
+
+    if (!useDeepAr) return;
+
+    try {
+      Loggers.info('[Gesture] DeepAR gestureStream listener attached');
+      _deepArGestureSub = deepArControllerPlus.value.gestureStream.listen((e) {
+        if (_isDisposed) return;
+        final gesture = (e['gesture'] ?? '').toString().toLowerCase();
+        Loggers.info('[Gesture] DeepAR event gesture=$gesture raw=$e');
+        if (gesture == 'palm_open' || gesture == 'thumb_up') {
+          _onPalmDetectedFromNative();
+        }
+      });
+    } catch (_) {}
+  }
+
+  @override
+  void onClose() {
+    _isDisposed = true;
+    _deepArGestureSub?.cancel();
+    _deepArGestureSub = null;
+    _stopGestureHintCycle();
+    _cancelGestureCountdown();
+    _cleanUpResources();
+    super.onClose();
+  }
+
+  // Initialization methods
+  Future<void> _initialize() async {
+    isCameraBooting.value = true;
+    final granted = await _ensureCameraPermissions();
+    if (!granted) {
+      isCameraBooting.value = false;
+      showPermissionDeniedSheet();
+      return;
+    }
+
+    // Do not block camera boot on network settings.
+    // Use cached settings immediately; refresh in background.
+    unawaited(_refreshGlobalSettings());
+
+    final setting = SessionManager.instance.getSettings();
+    final isDeepArFlag = setting?.isDeepAr;
+    final hasDeepArKey = (setting?.deeparAndroidKey ?? '').trim().isNotEmpty ||
+        (setting?.deeparIOSKey ?? '').trim().isNotEmpty;
+
+    // Always use DeepAR if keys are present or we want to enforce it
+    _useDeepArRuntime.value = true;
+
+    _setupDeepArGestureListener();
+
+    Loggers.info('[AR] runtime flags useDeepAr=${_useDeepArRuntime.value}');
+    await _initCamera();
+    _ensureDefaultFrontCamera();
+    _initData();
+    isCameraBooting.value = false;
+  }
+
+  Future<void> _refreshGlobalSettings() async {
+    try {
+      await CommonService.instance.fetchGlobalSettings(forceRefresh: true);
+      Loggers.info('[AR] fetchGlobalSettings refreshed');
+    } catch (e) {
+      Loggers.error('[AR] fetchGlobalSettings failed: $e');
+    }
+  }
+
+  Future<bool> _ensureCameraPermissions() async {
+    try {
+      final cameraStatus = await Permission.camera.request();
+      final microphoneStatus = await Permission.microphone.request();
+      return cameraStatus.isGranted && microphoneStatus.isGranted;
+    } catch (e) {
+      Loggers.error('Camera/Microphone permission request failed: $e');
+      return false;
+    }
+  }
+
+  Future<void> _initData() async {
+    if (cameraType == CameraScreenType.story) {
+      selectedSecond.value = AppRes.storyVideoDuration;
+    }
+    await _initializeAudioIfNeeded();
+  }
+
+  Future<void> _initializeAudioIfNeeded() async {
+    if (selectedMusic.value == null) return;
+
+    try {
+      final path = selectedMusic.value?.downloadedURL ?? '';
+      if (path.isEmpty) return;
+
+      if (path.startsWith('http')) {
+        await audioPlayer.setUrl(path);
+      } else {
+        await audioPlayer.setFilePath(path);
+      }
+
+      final audioTotalDurationInMs = audioPlayer.duration?.inMilliseconds ?? 0;
+      Loggers.info('Audio Total Duration $audioTotalDurationInMs');
+      List<int> newSecondList = [];
+      int audioSecond = (audioTotalDurationInMs / 1000).toInt();
+      for (var element in secondsList) {
+        if (element <= audioSecond) {
+          newSecondList.add(element);
+        }
+      }
+
+      if (newSecondList.isNotEmpty) {
+        secondsList.value = newSecondList;
+        selectedSecond.value = secondsList.first;
+      } else {
+        showSnackBar(
+            LKey.recordUpToSeconds.trParams({'second': '$audioSecond'}));
+        selectedSecond.value = audioSecond;
+        isSecondListShow.value = false;
+      }
+      Loggers.info('Recording Second ${selectedSecond.value}');
+      int startAudioMs = selectedMusic.value?.audioStartMS ?? 0;
+      if (isStartingRecording.value) {
+        await audioPlayer.seek(Duration(
+            milliseconds: startAudioMs + (progress.value * 1000).toInt()));
+      } else {
+        await audioPlayer.seek(Duration(milliseconds: startAudioMs));
+      }
+      Loggers.success('Audio Duration: $startAudioMs');
+    } catch (e) {
+      Loggers.error('Audio initialization error: $e');
+    }
+  }
+
+  Future<void> _initCamera() async {
+    Loggers.info('Initialize camera');
+    isCameraBooting.value = true;
+    if (useDeepAr) {
+      await _initDeepArCamera();
+    } else {
+      try {
+        _disposePlatformCameraIfAny();
+        RetrytechPlugin.shared.initCamera();
+      } catch (e) {
+        Loggers.error('Normal camera init failed: $e');
+      }
+      isCameraBooting.value = false;
+      return;
+    }
+    // DeepAR init finished (success or not); UI can decide what to show.
+    isCameraBooting.value = false;
+  }
+
+  void _ensureDefaultFrontCamera() {
+    if (_didForceDefaultFront) return;
+
+    // If DeepAR is used, we must wait for initialization
+    if (useDeepAr && !isDeepARInitialized.value) {
+      Future.delayed(
+          const Duration(milliseconds: 500), _ensureDefaultFrontCamera);
+      return;
+    }
+
+    if (isFrontCamera.value) {
+      _didForceDefaultFront = true;
+      return;
+    }
+
+    _didForceDefaultFront = true;
+
+    for (int i = 1; i <= 5; i++) {
+      Future.delayed(Duration(milliseconds: 500 * i), () {
+        if (_isDisposed) return;
+
+        if (useDeepAr && isDeepARInitialized.value) {
+          try {
+            final dir = deepArControllerPlus.value.cameraDirection;
+            isFrontCamera.value = dir == CameraDirection.front;
+          } catch (_) {}
+        }
+
+        if (isFrontCamera.value) return;
+        try {
+          onToggleCamera();
+        } catch (_) {}
+      });
+    }
+  }
+
+  Future<void> onAppLifecycleChanged(AppLifecycleState state) async {
+    if (_isDisposed) return;
+    switch (state) {
+      case AppLifecycleState.resumed:
+        await _runCameraOperation(() async {
+          if (_isDisposed) return;
+          if (useDeepAr) {
+            if (isDeepARInitialized.value == false) {
+              // After app backgrounding we destroy DeepAR; recreating controller
+              // avoids a black preview due to reusing a destroyed instance.
+              try {
+                deepArControllerPlus.value = DeepArControllerPlus();
+              } catch (_) {}
+              await _initCamera();
+            }
+          } else {
+            _disposePlatformCameraIfAny();
+            try {
+              RetrytechPlugin.shared.initCamera();
+            } catch (e) {
+              Loggers.error('Normal camera re-init failed: $e');
+            }
+          }
+        });
+        break;
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+      case AppLifecycleState.hidden:
+        await _runCameraOperation(() async {
+          await disposeCamera();
+        });
+        break;
+    }
+  }
+
+  Future<void> _runCameraOperation(Future<void> Function() action) async {
+    try {
+      final active = _cameraOperationCompleter;
+      if (active != null && !active.isCompleted) {
+        await active.future;
+      }
+    } catch (_) {}
+
+    final completer = Completer<void>();
+    _cameraOperationCompleter = completer;
+    try {
+      await action();
+    } finally {
+      if (!completer.isCompleted) {
+        completer.complete();
+      }
+    }
+  }
+
+  void _disposePlatformCameraIfAny() {
+    try {
+      final plugin = RetrytechPlugin.shared;
+      try {
+        (plugin as dynamic).disposeCamera();
+      } catch (_) {}
+      try {
+        (plugin as dynamic).stopCamera();
+      } catch (_) {}
+      try {
+        (plugin as dynamic).releaseCamera();
+      } catch (_) {}
+      try {
+        (plugin as dynamic).stopPreview();
+      } catch (_) {}
+    } catch (e) {
+      Loggers.error('Platform camera dispose attempt failed: $e');
+    }
+  }
+
+  void _fallbackToNormalCamera() {
+    try {
+      _disposePlatformCameraIfAny();
+    } catch (_) {}
+    try {
+      RetrytechPlugin.shared.initCamera();
+    } catch (_) {}
+  }
+
+  Future<void> _initDeepArCamera() async {
+    try {
+      final androidKey = (appSetting?.deeparAndroidKey ?? '').trim();
+      final iosKey = (appSetting?.deeparIOSKey ?? '').trim();
+
+      if (androidKey.isEmpty && iosKey.isEmpty) {
+        Loggers.error('[AR] DeepAR init skipped: missing license key');
+        showSnackBar('DeepAR license key missing');
+        // Option A: DeepAR-only. Do not fallback to platform camera.
+        _useDeepArRuntime.value = true;
+        return;
+      }
+
+      final controller = deepArControllerPlus.value;
+      final resolutions = <Resolution>[
+        Resolution.high,
+        Resolution.medium,
+        Resolution.low,
+      ];
+
+      Object? lastError;
+      for (final r in resolutions) {
+        try {
+          await controller
+              .initialize(
+                androidLicenseKey: androidKey.isNotEmpty ? androidKey : null,
+                iosLicenseKey: iosKey.isNotEmpty ? iosKey : null,
+                resolution: r,
+              )
+              .timeout(const Duration(seconds: 10));
+          lastError = null;
+          break;
+        } catch (e) {
+          lastError = e;
+          try {
+            controller.destroy();
+          } catch (_) {}
+        }
+      }
+
+      if (lastError != null) {
+        throw lastError;
+      }
+      try {
+        deepArControllerPlus.value.fireTrigger(trigger: 's');
+      } catch (e) {
+        Loggers.error('DeepAR fireTrigger failed: $e');
+      }
+
+      // Some plugin versions throw if effect path is empty.
+      try {
+        final emptyEffect = ''.trim();
+        if (emptyEffect.isNotEmpty) {
+          deepArControllerPlus.value.switchEffect(emptyEffect);
+        }
+      } catch (e) {
+        Loggers.error('DeepAR switchEffect failed: $e');
+      }
+      isDeepARInitialized.value = true;
+      _useDeepArRuntime.value = true;
+
+      _setupDeepArGestureListener();
+      if (isGestureControlEnabled.value) {
+        try {
+          deepArControllerPlus.value.setGestureMlEnabled(true);
+        } catch (_) {}
+      }
+    } on TimeoutException catch (e) {
+      Loggers.error('Error initializing AR (timeout): $e');
+      showSnackBar('DeepAR init timeout');
+      // Option A: DeepAR-only. Keep DeepAR path to avoid inconsistent feature set.
+      _useDeepArRuntime.value = true;
+    } catch (e) {
+      Loggers.error('Error initializing AR: $e');
+      showSnackBar('DeepAR init failed');
+      // Option A: DeepAR-only. Keep DeepAR path to avoid inconsistent feature set.
+      _useDeepArRuntime.value = true;
+    }
+  }
+
+  // Cleanup methods
+  void _cleanUpResources() {
+    _progressTimer?.cancel();
+    _effectDebounceTimer?.cancel();
+    _zoomSmoothingTimer?.cancel();
+    _cameraOperationCompleter?.complete();
+    disposeCamera();
+
+    audioPlayer.dispose();
+  }
+
+  Future<void> disposeCamera() async {
+    Loggers.info('Dispose camera');
+    if (useDeepAr) {
+      isDeepARInitialized.value = false;
+      try {
+        deepArControllerPlus.value.destroy();
+      } catch (e) {
+        Loggers.error('DeepAR destroy failed: $e');
+      }
+    } else {
+      _disposePlatformCameraIfAny();
+      return;
+    }
+  }
+
+  // Permission handling
+  void showPermissionDeniedSheet() {
+    Get.bottomSheet(
+      ConfirmationSheet(
+        title: LKey.cameraMicrophonePermissionTitle.tr,
+        description: LKey.cameraMicrophonePermissionDescription
+            .trParams({'app_name': AppRes.appName}),
+        onTap: openAppSettings,
+        onClose: () => Get.back(),
+        positiveText: LKey.openSetting.tr,
+        isDismissible: true,
+      ),
+      enableDrag: false,
+      isDismissible: false,
+    );
+  }
+
+  // Media handling methods
+  Future<void> onMediaTap() async {
+    try {
+      switch (cameraType) {
+        case CameraScreenType.post:
+          final mediaFile = await MediaPickerHelper.shared
+              .pickVideo(source: ImageSource.gallery);
+          if (mediaFile != null) await _handleReel(mediaFile);
+          break;
+
+        case CameraScreenType.story:
+          final mediaFile = await MediaPickerHelper.shared.pickMedia();
+          if (mediaFile != null) {
+            await (mediaFile.type == MediaType.image
+                ? handleImageStory(mediaFile)
+                : handleVideoStory(mediaFile));
+          }
+          break;
+      }
+    } catch (e) {
+      Loggers.error('Media selection error: $e');
+    }
+  }
+
+  Future<void> handleImageStory(MediaFile file) async {
+    String imagePath = file.file.path;
+    try {
+      final bgColor = await imagePath.getGradientFromImage;
+
+      await _navigateToEditScreen(
+          PostStoryContentType.storyImage, imagePath, imagePath, bgColor);
+    } catch (e) {
+      Loggers.error('Gradient Error $e');
+    }
+  }
+
+  Future<void> handleVideoStory(MediaFile file,
+      {bool isCameraFile = false}) async {
+    String thumbnailPath = file.thumbNail.path;
+    String videoPath = file.file.path;
+
+    // Fix rotation for story video as well
+    if (isCameraFile) {
+      showLoader();
+      final dir = File(videoPath).parent.path;
+      final result =
+          await MediaPickerHelper.shared.compressVideo(videoPath, dir);
+      videoPath = result?.path ?? videoPath;
+      stopLoader();
+    }
+
+    final bgColor = await thumbnailPath.getGradientFromImage;
+    await _navigateToEditScreen(
+      PostStoryContentType.storyVideo,
+      videoPath,
+      thumbnailPath,
+      bgColor,
+      isCameraFile: isCameraFile,
+    );
+  }
+
+  Future<void> _navigateToEditScreen(PostStoryContentType type,
+      String contentPath, String thumbnailPath, LinearGradient bgColor,
+      {bool isCameraFile = false}) async {
+    final content = PostStoryContent(
+      type: type,
+      content: contentPath,
+      thumbNail: thumbnailPath,
+      duration: AppRes.storyImageAndTextDuration,
+      bgGradient: bgColor,
+      sound: selectedMusic.value,
+      isFrontCamera: isFrontCamera.value,
+    );
+
+    navigateCameraEditScreen(content);
+  }
+
+  // Camera control methods
+  void onToggleFlash() {
+    if (useDeepAr && isDeepARInitialized.value) {
+      try {
+        deepArControllerPlus.value.toggleFlash();
+      } catch (e) {
+        Loggers.error('DeepAR toggleFlash failed: $e');
+      }
+    } else {
+      RetrytechPlugin.shared.flashOnOff;
+      isTorchOn.toggle();
+    }
+  }
+
+  Future<void> onToggleCamera() async {
+    if (useDeepAr && isDeepARInitialized.value) {
+      try {
+        deepArControllerPlus.value.flipCamera();
+        isFrontCamera.toggle();
+      } catch (e) {
+        Loggers.error('DeepAR flipCamera failed: $e');
+      }
+    } else {
+      if (isTorchOn.value) {
+        isTorchOn.value = false;
+        RetrytechPlugin.shared.flashOnOff;
+      }
+      RetrytechPlugin.shared.toggleCamera;
+      isFrontCamera.toggle();
+    }
+  }
+
+  // Video recording methods
+  Future<void> onVideoRecordingStart() async {
+    if (useDeepAr && isDeepARInitialized.value == false) return;
+    if (isRecording.value) return;
+
+    try {
+      if (useDeepAr) {
+        await deepArControllerPlus.value.startVideoRecording();
+      } else {
+        RetrytechPlugin.shared.startRecording;
+      }
+      _updateAudioSpeed(); // Set speed before playing
+      _startAudioPlayback();
+      isRecording.value = true;
+      isStartingRecording.value = true;
+      _startProgress = progress.value;
+      _startZoom = _currentZoom.value;
+      _startProgressTimer();
+    } catch (e) {
+      Loggers.error("Video recording start error: $e");
+    }
+  }
+
+  Future<void> onVideoRecordingPause() async {
+    if (!isRecording.value) return;
+
+    if (useDeepAr) {
+      // For DeepAR, pause means stop current segment
+      await onVideoRecordingStop();
+      // But we keep isStartingRecording true to indicate session is active
+      isStartingRecording.value = true;
+    } else {
+      // For standard camera, we also want to stop to save the chunk immediately
+      // This allows "Undo" to work per segment and prevents data loss.
+      await onVideoRecordingStop();
+      isStartingRecording.value = true;
+
+      // Old logic was just pausing stream:
+      // RetrytechPlugin.shared.pauseRecording;
+      // _pauseAudioPlayback();
+      // isRecording.value = false;
+      // _progressTimer?.cancel();
+    }
+  }
+
+  Future<void> onVideoRecordingResume() async {
+    if (isRecording.value) return;
+
+    // Since we now "Stop" instead of "Pause" for both modes to save chunks,
+    // "Resume" actually means starting a new recording segment.
+    await onVideoRecordingStart();
+
+    // Old logic:
+    // if (useDeepAr) {
+    //   await onVideoRecordingStart();
+    // } else {
+    //   RetrytechPlugin.shared.resumeRecording;
+    //   _updateAudioSpeed();
+    //   _resumeAudioPlayback();
+    //   isRecording.value = true;
+    //   _startProgressTimer();
+    // }
+  }
+
+  Future<void> onVideoRecordingStop({bool forceFinish = false}) async {
+    if (useDeepAr && isDeepARInitialized.value == false) return;
+
+    if (!isStartingRecording.value) return;
+
+    try {
+      XFile? file;
+
+      _stopAudioPlayback();
+      _progressTimer?.cancel();
+      bool wasRecording = isRecording.value;
+      isRecording.value = false;
+      // Note: We don't set isStartingRecording to false immediately if we have chunks and are not finished.
+
+      // Check if recording is complete (full duration)
+      final bool isFinished =
+          progress.value >= (selectedSecond.value - 0.5) || forceFinish;
+
+      if (wasRecording) {
+        showLoader();
+        if (useDeepAr) {
+          final File file0 =
+              await deepArControllerPlus.value.stopVideoRecording();
+          file = XFile(file0.path);
+
+          // Calculate duration of this segment
+          final duration = progress.value - _startProgress;
+          if (duration > 0) {
+            _recordedChunks.add(file.path);
+            _chunkDurations.add(duration);
+            _chunkSpeeds
+                .add(recordingSpeed.value); // Store speed for this chunk
+          }
+        } else {
+          file = XFile(await RetrytechPlugin.shared.stopRecording ?? '');
+
+          final duration = progress.value - _startProgress;
+          if (duration > 0) {
+            _recordedChunks.add(file.path);
+            _chunkDurations.add(duration);
+            _chunkSpeeds.add(recordingSpeed.value);
+          }
+        }
+      }
+
+      if (!isFinished) {
+        if (wasRecording) stopLoader();
+        // User can resume recording (which will start a new file).
+        return;
+      }
+
+      // If we didn't record a new file (because we were paused), use the last one
+      if (file == null && _recordedChunks.isNotEmpty) {
+        file = XFile(_recordedChunks.last);
+      }
+
+      if (file == null) {
+        stopLoader();
+        return;
+      }
+
+      // Finalize and navigate
+      isStartingRecording.value = false;
+      if (cameraType == CameraScreenType.post) {
+        // Generate a real thumbnail instead of passing the video file
+        XFile thumbnailFile = file;
+        try {
+          thumbnailFile = await MediaPickerHelper.shared
+              .extractThumbnail(videoPath: file.path);
+        } catch (e) {
+          Loggers.error("Thumbnail generation failed in CameraScreen: $e");
+        }
+
+        await _handleReel(
+            MediaFile(
+                file: file, type: MediaType.video, thumbNail: thumbnailFile),
+            chunks: List.from(_recordedChunks),
+            speeds: List.from(_chunkSpeeds));
+      } else {
+        // Story mode
+        XFile thumbnailFile = file;
+        try {
+          thumbnailFile = await MediaPickerHelper.shared
+              .extractThumbnail(videoPath: file.path);
+        } catch (e) {
+          Loggers.error("Thumbnail generation failed in Story Mode: $e");
+        }
+        await handleVideoStory(
+            MediaFile(
+                file: file, type: MediaType.video, thumbNail: thumbnailFile),
+            isCameraFile: true);
+      }
+
+      // Reset for next time (unless navigated away, but safe to clear)
+      // _recordedChunks.clear(); // Cleared in _handleReel or after nav
+    } catch (e) {
+      Loggers.error("Video recording stop error: $e");
+      stopLoader();
+    }
+  }
+
+  void onUndo() {
+    if (_recordedChunks.isEmpty) return;
+
+    final lastChunkPath = _recordedChunks.removeLast();
+    final lastDuration =
+        _chunkDurations.isNotEmpty ? _chunkDurations.removeLast() : 0.0;
+
+    // Delete file
+    try {
+      File(lastChunkPath).delete();
+    } catch (_) {}
+
+    // Revert progress
+    progress.value = (progress.value - lastDuration)
+        .clamp(0.0, selectedSecond.value.toDouble());
+
+    // Reset state if empty
+    if (_recordedChunks.isEmpty) {
+      isStartingRecording.value = false;
+      // Seek audio to start
+      if (selectedMusic.value != null) {
+        audioPlayer.seek(
+            Duration(milliseconds: selectedMusic.value!.audioStartMS ?? 0));
+      }
+    } else {
+      // Seek audio to new progress
+      if (selectedMusic.value != null) {
+        int startMs = selectedMusic.value!.audioStartMS ?? 0;
+        audioPlayer.seek(
+            Duration(milliseconds: startMs + (progress.value * 1000).toInt()));
+      }
+    }
+  }
+
+  Future<void> onNextTap() async {
+    // If user taps Next while recording, finalize the current segment first.
+    if (isRecording.value || isStartingRecording.value) {
+      try {
+        await onVideoRecordingStop(forceFinish: true);
+      } catch (_) {}
+    }
+    // Note: onVideoRecordingStop(forceFinish:true) already handles finalizing chunks and navigation.
+    // So we don't need to duplicate logic here, unless recording was already stopped but not navigated.
+
+    // If we are not recording and have chunks but haven't navigated yet:
+    if (!isStartingRecording.value && _recordedChunks.isNotEmpty) {
+      final file = XFile(_recordedChunks.last);
+      // Generate thumbnail before handling reel
+      XFile thumbnailFile = file;
+      try {
+        thumbnailFile = await MediaPickerHelper.shared
+            .extractThumbnail(videoPath: file.path);
+      } catch (e) {
+        Loggers.error("Thumbnail generation failed in onNextTap: $e");
+      }
+
+      await _handleReel(
+          MediaFile(
+              file: file, type: MediaType.video, thumbNail: thumbnailFile),
+          chunks: List.from(_recordedChunks),
+          speeds: List.from(_chunkSpeeds));
+    }
+  }
+
+  void onToggleTools() {
+    isToolsExpanded.toggle();
+  }
+
+  void _startProgressTimer() {
+    _progressTimer?.cancel();
+
+    final totalSteps = selectedSecond.value * (1000 ~/ _progressUpdateInterval);
+    final increment = selectedSecond.value / totalSteps;
+
+    _progressTimer = Timer.periodic(
+      const Duration(milliseconds: _progressUpdateInterval),
+      (timer) {
+        if (progress.value < selectedSecond.value) {
+          Loggers.info('Video Recording Second ${progress.value}');
+          progress.value = (progress.value + increment)
+              .clamp(0.0, selectedSecond.value.toDouble());
+        } else {
+          timer.cancel();
+          onVideoRecordingStop();
+        }
+      },
+    );
+  }
+
+  // Audio control methods
+  void _startAudioPlayback() {
+    if (selectedMusic.value == null) return;
+    audioPlayer
+        .seek(Duration(milliseconds: selectedMusic.value?.audioStartMS ?? 0));
+    audioPlayer.play();
+  }
+
+  void _pauseAudioPlayback() => audioPlayer.pause();
+
+  void _resumeAudioPlayback() => audioPlayer.play();
+
+  void _stopAudioPlayback() => audioPlayer.stop();
+
+  // UI interaction methods
+  Future<void> onPlayPauseToggle({int? type}) async {
+    if (cameraType == CameraScreenType.post) {
+      if (type != null) {
+        if (type == 1) {
+          // Start or resume recording
+          if (!isStartingRecording.value) {
+            await onVideoRecordingStart();
+          } else if (!isRecording.value) {
+            await onVideoRecordingResume();
+          }
+          return;
+        }
+        if (type == 2) {
+          // Stop/pause current segment
+          if (isRecording.value) {
+            // User requested stop -> Pause first
+            await onVideoRecordingPause();
+            // Optional: If you want "Stop" to mean "Finish Recording", call onNextTap()
+            // But usually "Stop" means "Pause Segment".
+            // If the user wants to FINISH, they tap "Next".
+            // If the user wants to STOP RECORDING (Pause), they tap the button.
+          }
+          return;
+        }
+      }
+
+      // Toggle logic for tap (No explicit type)
+      if (!isStartingRecording.value) {
+        // Not started -> Start
+        await onVideoRecordingStart();
+      } else {
+        // Session active
+        if (isRecording.value) {
+          // Recording -> Pause (Stop current segment)
+          await onVideoRecordingPause(); // Ensure we await the stop logic
+        } else {
+          // Paused -> Resume
+          await onVideoRecordingResume();
+        }
+      }
+    } else {
+      if (type != null) {
+        if (type == 1) {
+          await onVideoRecordingStart();
+        } else {
+          await onVideoRecordingStop();
+        }
+      } else {
+        await capturePhoto();
+      }
+    }
+  }
+
+  void _toggleReelRecording() {
+    // Deprecated, logic moved to onPlayPauseToggle
+  }
+
+  // Duplicate removed. Use onNextTap above.
+
+  Future<void> capturePhoto() async {
+    if (useDeepAr && isDeepARInitialized.value == false) return;
+    if (isRecording.value) return;
+
+    try {
+      XFile file;
+      if (useDeepAr) {
+        File photo = await deepArControllerPlus.value.takeScreenshot();
+        Loggers.info(photo.path);
+        file = XFile(photo.path);
+      } else {
+        file = XFile(await RetrytechPlugin.shared.captureImage() ?? '');
+      }
+      await handleImageStory(
+          MediaFile(file: file, type: MediaType.image, thumbNail: file));
+    } catch (e) {
+      Loggers.error("Photo capture error: $e");
+    }
+  }
+
+  Future<void> _handleReel(MediaFile file,
+      {List<String>? chunks, List<double>? speeds}) async {
+    showLoader();
+    try {
+      // Fix rotation by re-encoding all chunks immediately
+      Loggers.info('Processing reel chunks for rotation fix...');
+      // ignore: avoid_print
+      Loggers.info('ROT_FIX_START');
+      List<String> processedChunks = [];
+
+      if (chunks != null && chunks.isNotEmpty) {
+        for (var path in chunks) {
+          // ignore: avoid_print
+          Loggers.info('ROT_FIX_ONE');
+          final dir = File(path).parent.path;
+          final result =
+              await MediaPickerHelper.shared.compressVideo(path, dir);
+          processedChunks.add(result?.path ?? path);
+        }
+      } else {
+        // Fallback if chunks is empty but file is provided
+        final path = file.file.path;
+        final dir = File(path).parent.path;
+        final result = await MediaPickerHelper.shared.compressVideo(path, dir);
+        processedChunks.add(result?.path ?? path);
+      }
+
+      // ignore: avoid_print
+      Loggers.info('ROT_FIX_DONE');
+
+      final content = PostStoryContent(
+          type: PostStoryContentType.reel,
+          content: processedChunks.last,
+          thumbNail: file.thumbNail.path,
+          sound: selectedMusic.value,
+          additionalContent: processedChunks,
+          speeds: speeds,
+          isFrontCamera: isFrontCamera.value);
+      stopLoader();
+      navigateCameraEditScreen(content);
+    } catch (e) {
+      Loggers.error('Reel handling error: $e');
+      stopLoader();
+    }
+  }
+
+  Future<void> onMusicTap() async {
+    final music = await Get.bottomSheet<SelectedMusic>(
+        MusicSheet(videoDurationInSecond: selectedSecond.value),
+        isScrollControlled: true,
+        enableDrag: false,
+        isDismissible: false);
+
+    if (music != null) {
+      selectedMusic.value = music;
+      await _initializeAudioIfNeeded();
+    }
+  }
+
+  void onSelectedMusicTap(SelectedMusic? music) async {
+    if (music != null && !isStartingRecording.value) {
+      final newMusic = await Get.bottomSheet<SelectedMusic>(
+        SelectedMusicSheet(
+            selectedMusic: music, totalVideoSecond: selectedSecond.value),
+        isScrollControlled: true,
+      );
+      if (newMusic != null) {
+        selectedMusic.value = newMusic;
+        await _initializeAudioIfNeeded();
+      }
+    }
+  }
+
+  void onDeleteMusic() {
+    selectedMusic.value = null;
+    audioPlayer.stop();
+  }
+
+  void onEffectToggle() {
+    final next = !isEffectShow.value;
+    isEffectShow.value = next;
+    if (next) {
+      isBeautyShow.value = false;
+      isMakeupShow.value = false;
+      isTriggerShow.value = false;
+    }
+  }
+
+  final List<String> deepArPresetTriggers = const [
+    'blink',
+    'open_mouth',
+    'smile',
+    'raise_eyebrows',
+  ];
+
+  final RxString deepArCustomTrigger = ''.obs;
+
+  void onTriggerToggle() {
+    if (!useDeepAr) return;
+    final next = !isTriggerShow.value;
+    isTriggerShow.value = next;
+    if (next) {
+      isEffectShow.value = false;
+      isBeautyShow.value = false;
+      isMakeupShow.value = false;
+    }
+  }
+
+  Future<void> fireDeepArTrigger(String trigger) async {
+    final t = trigger.trim();
+    if (t.isEmpty) return;
+    if (_isDisposed) return;
+    if (!useDeepAr) return;
+    if (isDeepARInitialized.value == false) {
+      showSnackBar('DeepAR not ready');
+      return;
+    }
+    try {
+      deepArControllerPlus.value.fireTrigger(trigger: t);
+    } catch (e) {
+      Loggers.error('DeepAR fireTrigger failed: $e');
+      showSnackBar('Trigger failed');
+    }
+  }
+
+  void onBeautyToggle() {
+    final next = !isBeautyShow.value;
+    isBeautyShow.value = next;
+    if (next) {
+      isEffectShow.value = false;
+      isMakeupShow.value = false;
+    }
+  }
+
+  void onMakeupToggle() {
+    final next = !isMakeupShow.value;
+    isMakeupShow.value = next;
+    if (next) {
+      isEffectShow.value = false;
+      isBeautyShow.value = false;
+    }
+  }
+
+  Future<void> setDeepArBeautyParameter(String param, double value) async {
+    if (!useDeepAr) return;
+
+    // Update observable
+    switch (param) {
+      case 'skin_smoothing':
+        deepArSkinSmoothing.value = value;
+        break;
+      case 'eye_size':
+        deepArFaceMorphingEyeSize.value = value;
+        break;
+      case 'face_shape':
+        deepArFaceMorphingFaceShape.value = value;
+        break;
+      case 'nose_size':
+        deepArFaceMorphingNoseSize.value = value;
+        break;
+      case 'chin_size':
+        deepArFaceMorphingChinSize.value = value;
+        break;
+      case 'mouth_position':
+        deepArFaceMorphingMouthPosition.value = value;
+        break;
+      case 'makeup_lips':
+        deepArMakeupLips.value = value;
+        break;
+      case 'makeup_blush':
+        deepArMakeupBlush.value = value;
+        break;
+      case 'makeup_foundation':
+        deepArMakeupFoundation.value = value;
+        break;
+      case 'makeup_eyeshadow':
+        deepArMakeupEyeshadow.value = value;
+        break;
+      case 'makeup_eyelashes':
+        deepArMakeupEyelashes.value = value;
+        break;
+      case 'makeup_eyebrows':
+        deepArMakeupEyebrows.value = value;
+        break;
+      case 'hair_color_strength':
+        deepArHairColorStrength.value = value;
+        break;
+    }
+
+    _deepArBeautyDebounce?.cancel();
+    _deepArBeautyDebounce = Timer(const Duration(milliseconds: 100), () {
+      _applyDeepArBeautyParameter(param, value);
+    });
+  }
+
+  Future<void> setDeepArHairColor(Color color) async {
+    deepArHairColor.value = color;
+    if (!useDeepAr || !isDeepARInitialized.value) return;
+
+    // DeepAR expects 0-1 range for RGB
+    final r = color.red / 255.0;
+    final g = color.green / 255.0;
+    final b = color.blue / 255.0;
+
+    // Using standard Hair segmentation component name 'Hair'
+    // This might require a hair segmentation model to be active.
+    try {
+      // Alternative: set individual channels if supported
+      await deepArControllerPlus.value.changeParameter(
+          gameObject: 'Hair',
+          component: 'Hair',
+          parameter: 'color.x',
+          newParameter: r);
+      await deepArControllerPlus.value.changeParameter(
+          gameObject: 'Hair',
+          component: 'Hair',
+          parameter: 'color.y',
+          newParameter: g);
+      await deepArControllerPlus.value.changeParameter(
+          gameObject: 'Hair',
+          component: 'Hair',
+          parameter: 'color.z',
+          newParameter: b);
+
+      // Also enable it
+      await deepArControllerPlus.value.changeParameter(
+          gameObject: 'Hair',
+          component: 'Hair',
+          parameter: 'enable',
+          newParameter: 1.0);
+    } catch (e) {
+      Loggers.error('DeepAR hair color error: $e');
+    }
+  }
+
+  Future<void> _applyDeepArBeautyParameter(String param, double value) async {
+    if (!useDeepAr || !isDeepARInitialized.value) return;
+
+    // Mapping based on DeepAR Beauty API
+    // We assume the standard GameObject structure or try to map parameter names.
+    // If using the official Beauty API via changeParameter:
+    // skinSmoothing: value 0-100
+    // faceMorphing.eyeSize: value -100 to 100
+
+    String gameObject =
+        'camera'; // Default root object often used for global effects
+    String component =
+        'Beauty'; // Often the component is named Script or Beauty
+    String parameterName = '';
+    double adjustedValue =
+        value; // Default 0-1 range from slider, might need scaling
+
+    // Try multiple possible mappings if unsure, or stick to standard.
+    // Based on docs: beauty.faceMorphing.eyeSize
+
+    try {
+      switch (param) {
+        case 'skin_smoothing':
+          // skinSmoothing: 0-100
+          parameterName = 'skinSmoothing';
+          adjustedValue = value * 100;
+          break;
+        case 'eye_size':
+          // faceMorphing.eyeSize: -100 to 100
+          parameterName = 'faceMorphing.eyeSize';
+          adjustedValue = (value * 200) - 100;
+          break;
+        case 'face_shape':
+          // faceMorphing.faceShape: -100 to 100
+          parameterName = 'faceMorphing.faceShape';
+          adjustedValue = (value * 200) - 100;
+          break;
+        case 'nose_size':
+          parameterName = 'faceMorphing.noseSize';
+          adjustedValue = (value * 200) - 100;
+          break;
+        case 'chin_size':
+          parameterName = 'faceMorphing.chinSize';
+          adjustedValue = (value * 200) - 100;
+          break;
+        case 'mouth_position':
+          parameterName = 'faceMorphing.mouthPositionVertical';
+          adjustedValue = (value * 200) - 100;
+          break;
+        case 'makeup_lips':
+          // lipMakeup.lipstick.amount: 0-100
+          parameterName = 'lipMakeup.lipstick.amount';
+          adjustedValue = value * 100;
+          // Also enable lipstick if value > 0
+          if (value > 0) {
+            await deepArControllerPlus.value.changeParameter(
+                gameObject: gameObject,
+                component: component,
+                parameter: 'lipMakeup.lipstick.enable',
+                newParameter: 1.0);
+          }
+          break;
+        case 'makeup_blush':
+          // faceMakeup.blush.intensity: 0-100
+          parameterName = 'faceMakeup.blush.intensity';
+          adjustedValue = value * 100;
+          if (value > 0) {
+            await deepArControllerPlus.value.changeParameter(
+                gameObject: gameObject,
+                component: component,
+                parameter: 'faceMakeup.blush.enable',
+                newParameter: 1.0);
+          }
+          break;
+        case 'makeup_foundation':
+          // faceMakeup.foundation.strength: 0-100
+          parameterName = 'faceMakeup.foundation.strength';
+          adjustedValue = value * 100;
+          if (value > 0) {
+            await deepArControllerPlus.value.changeParameter(
+                gameObject: gameObject,
+                component: component,
+                parameter: 'faceMakeup.foundation.enable',
+                newParameter: 1.0);
+          }
+          break;
+        case 'makeup_eyeshadow':
+          parameterName = 'faceMakeup.eyeshadow.strength';
+          adjustedValue = value * 100;
+          if (value > 0) {
+            await deepArControllerPlus.value.changeParameter(
+                gameObject: gameObject,
+                component: component,
+                parameter: 'faceMakeup.eyeshadow.enable',
+                newParameter: 1.0);
+          }
+          break;
+        case 'makeup_eyelashes':
+          parameterName = 'faceMakeup.eyelashes.strength';
+          adjustedValue = value * 100;
+          if (value > 0) {
+            await deepArControllerPlus.value.changeParameter(
+                gameObject: gameObject,
+                component: component,
+                parameter: 'faceMakeup.eyelashes.enable',
+                newParameter: 1.0);
+          }
+          break;
+        case 'makeup_eyebrows':
+          parameterName = 'faceMakeup.eyebrows.strength';
+          adjustedValue = value * 100;
+          if (value > 0) {
+            await deepArControllerPlus.value.changeParameter(
+                gameObject: gameObject,
+                component: component,
+                parameter: 'faceMakeup.eyebrows.enable',
+                newParameter: 1.0);
+          }
+          break;
+        case 'hair_color_strength':
+          parameterName = 'Hair.strength';
+          adjustedValue = value * 100;
+          if (value > 0) {
+            await deepArControllerPlus.value.changeParameter(
+                gameObject: 'Hair',
+                component: 'Hair',
+                parameter: 'enable',
+                newParameter: 1.0);
+          }
+          break;
+      }
+
+      if (parameterName.isNotEmpty) {
+        await deepArControllerPlus.value.changeParameter(
+          gameObject: gameObject,
+          component: component,
+          parameter: parameterName,
+          newParameter: adjustedValue,
+        );
+
+        // Also try 'Beauty' as GameObject just in case
+        await deepArControllerPlus.value.changeParameter(
+          gameObject: 'Beauty',
+          component: component,
+          parameter: parameterName,
+          newParameter: adjustedValue,
+        );
+      }
+    } catch (e) {
+      Loggers.error('DeepAR beauty param error: $e');
+    }
+  }
+
+  Future<void> onSelectArEffect(DeepARFilters effect) async {
+    selectedEffect.value = effect;
+    if (_isDisposed) return;
+
+    if (useDeepAr) {
+      await applyARFilterEffect(effect);
+      return;
+    }
+  }
+
+  Future<void> onNavigateTextStory() async {
+    final content = PostStoryContent(
+      type: PostStoryContentType.storyText,
+      content: '',
+      thumbNail: '',
+      duration: AppRes.storyImageAndTextDuration,
+      sound: selectedMusic.value,
+    );
+    navigateCameraEditScreen(content);
+  }
+
+  Future<void> navigateCameraEditScreen(PostStoryContent content) async {
+    final desiredFront = isFrontCamera.value;
+    await disposeCamera();
+    await Get.to(() => CameraEditScreen(content: content));
+
+    // User might have exited the camera flow while on edit screen.
+    if (_isDisposed) return;
+
+    // Returning back from preview/edit should keep the current recording session
+    // (recorded chunks + progress). We only need to re-init the camera preview.
+    if (useDeepAr) {
+      try {
+        deepArControllerPlus.value = DeepArControllerPlus();
+      } catch (_) {}
+      isDeepARInitialized.value = false;
+    }
+    await _initCamera();
+    await _restoreCameraDirectionIfNeeded(desiredFront);
+  }
+
+  Future<void> _restoreCameraDirectionIfNeeded(bool desiredFront) async {
+    try {
+      if (_isDisposed) return;
+      if (desiredFront == isFrontCamera.value) return;
+
+      // Ensure DeepAR init is ready before flipping.
+      if (useDeepAr && !isDeepARInitialized.value) {
+        for (int i = 0; i < 10; i++) {
+          if (_isDisposed) return;
+          await Future.delayed(const Duration(milliseconds: 120));
+          if (isDeepARInitialized.value) break;
+        }
+      }
+
+      await onToggleCamera();
+    } catch (_) {}
+  }
+
+  void _resetAll() {
+    isEffectShow.value = false;
+    _effectRequestId++;
+    _initCamera();
+    progress.value = 0.0;
+    selectedMusic.value = null;
+    secondsList.value = AppRes.secondList;
+    selectedSecond.value = secondsList.first;
+    isSecondListShow.value = true;
+    _progressTimer?.cancel();
+    _effectDebounceTimer?.cancel();
+    audioPlayer.stop();
+    isStartingRecording.value = false;
+    _recordedChunks.clear();
+  }
+
+  Future<Directory> _getDeepArEffectsBaseDir() async {
+    if (_deepArEffectsBaseDir != null) return _deepArEffectsBaseDir!;
+    final dir = await getApplicationSupportDirectory();
+    final base = Directory(p.join(dir.path, 'deepar_effects'));
+    if (!await base.exists()) {
+      await base.create(recursive: true);
+    }
+    _deepArEffectsBaseDir = base;
+    return base;
+  }
+
+  Future<void> _unzipToDir(File zipFile, Directory targetDir) async {
+    final bytes = await zipFile.readAsBytes();
+    final archive = ZipDecoder().decodeBytes(bytes, verify: true);
+
+    for (final entry in archive) {
+      final name = entry.name;
+      if (name.isEmpty) continue;
+      if (p.isAbsolute(name)) continue;
+      final normalized = p.normalize(name);
+      if (normalized.startsWith('..')) continue;
+
+      final outPath = p.join(targetDir.path, normalized);
+      if (entry.isFile) {
+        final outFile = File(outPath);
+        await outFile.parent.create(recursive: true);
+        final data = entry.content as List<int>;
+        await outFile.writeAsBytes(data, flush: true);
+      } else {
+        await Directory(outPath).create(recursive: true);
+      }
+    }
+  }
+
+  Future<String> _ensureDeepArEffectReady({
+    required DeepARFilters effect,
+    required File downloadedFile,
+  }) async {
+    final filePath = downloadedFile.path;
+    final lower = filePath.toLowerCase();
+
+    // If it's not a zip, DeepAR can load the effect directly.
+    if (!lower.endsWith('.zip')) {
+      return filePath;
+    }
+
+    final base = await _getDeepArEffectsBaseDir();
+    final safeName =
+        '${effect.id}_${p.basenameWithoutExtension(filePath)}'.replaceAll(
+      RegExp(r'[^a-zA-Z0-9_\-\.]'),
+      '_',
+    );
+    final targetDir = Directory(p.join(base.path, safeName));
+
+    // If already extracted and looks valid, reuse.
+    if (await targetDir.exists()) {
+      final config = File(p.join(targetDir.path, 'config.json'));
+      if (await config.exists()) {
+        return targetDir.path;
+      }
+    }
+
+    try {
+      if (await targetDir.exists()) {
+        await targetDir.delete(recursive: true);
+      }
+      await targetDir.create(recursive: true);
+      await _unzipToDir(downloadedFile, targetDir);
+      return targetDir.path;
+    } catch (e) {
+      Loggers.error('[DeepAR] unzip failed: $e');
+      try {
+        if (await targetDir.exists()) {
+          await targetDir.delete(recursive: true);
+        }
+      } catch (_) {}
+      // Fallback: try passing the zip file path anyway.
+      return filePath;
+    }
+  }
+
+  Future<void> applyARFilterEffect(DeepARFilters effect) async {
+    selectedEffect.value = effect;
+
+    if (_isDisposed) return;
+    if (!useDeepAr) return;
+    if (isDeepARInitialized.value == false) return;
+
+    final requestId = ++_effectRequestId;
+
+    _effectDebounceTimer?.cancel();
+    _effectDebounceTimer = Timer(const Duration(milliseconds: 150), () async {
+      if (_isDisposed) return;
+      if (requestId != _effectRequestId) return;
+      if (isDeepARInitialized.value == false) return;
+      if (!useDeepAr) return;
+
+      try {
+        if (effect.id != -1) {
+          final url = (effect.filterFile?.trim() ?? '').isNotEmpty
+              ? effect.filterFile!.trim().addBaseURL()
+              : '';
+          if (url.isEmpty) {
+            return;
+          }
+          showLoader();
+          final fileInfo = await DefaultCacheManager()
+              .getSingleFile(url)
+              .timeout(const Duration(seconds: 15));
+          if (_isDisposed) return;
+          if (requestId != _effectRequestId) return;
+          stopLoader();
+          if (isDeepARInitialized.value == false) return;
+          if (!useDeepAr) return;
+          try {
+            final resolved = await _ensureDeepArEffectReady(
+              effect: effect,
+              downloadedFile: fileInfo,
+            );
+            deepArControllerPlus.value.switchEffect(resolved);
+          } catch (e) {
+            Loggers.error('DeepAR switchEffect failed: $e');
+          }
+        } else {
+          try {
+            deepArControllerPlus.value.switchEffect('');
+          } catch (e) {
+            Loggers.error('DeepAR clear effect failed: $e');
+          }
+        }
+      } on TimeoutException catch (e, stackTrace) {
+        stopLoader();
+        Loggers.error("Error applying AR effect (timeout): $e\n$stackTrace");
+        showSnackBar('Failed to apply effect');
+      } catch (e, stackTrace) {
+        stopLoader();
+        Loggers.error("Error applying AR effect: $e\n$stackTrace");
+        showSnackBar('Failed to apply effect');
+      }
+    });
+  }
+}
+
+enum PostStoryContentType { reel, storyText, storyImage, storyVideo }
+
+class PostStoryContent {
+  final PostStoryContentType type;
+  String? content;
+  String? thumbNail;
+  int? duration;
+  List<double> filter;
+  bool hasAudio;
+  SelectedMusic? sound;
+  LinearGradient? bgGradient;
+  Uint8List? thumbnailBytes;
+  bool isFrontCamera;
+  List<double>? speeds;
+  String? draftId; // ID for existing draft
+
+  PostStoryContent(
+      {required this.type,
+      this.content,
+      this.thumbNail,
+      this.duration,
+      this.filter = defaultFilter,
+      this.sound,
+      this.bgGradient,
+      this.thumbnailBytes,
+      this.hasAudio = true,
+      this.isFrontCamera = false,
+      this.additionalContent,
+      this.speeds,
+      this.draftId});
+
+  List<String>? additionalContent;
+}
+ˆ

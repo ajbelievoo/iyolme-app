@@ -1,0 +1,117 @@
+import 'package:flutter/foundation.dart';
+
+enum VideoCropPreset {
+  original,
+  square1x1,
+  portrait4x5,
+  landscape16x9,
+  portrait9x16,
+}
+
+enum VideoAudioFx {
+  none,
+  echo,
+  robot,
+  chipmunk,
+}
+
+enum VideoTransitionType {
+  none,
+  fade,
+  slideLeft,
+  slideRight,
+  wipeLeft,
+  wipeRight,
+  dissolve,
+}
+
+@immutable
+class VideoSegmentEdits {
+  final VideoCropPreset crop;
+  final VideoAudioFx audioFx;
+  final double speed;
+  final VideoTransitionType transition; // Transition FROM previous clip
+
+  const VideoSegmentEdits({
+    this.crop = VideoCropPreset.original,
+    this.audioFx = VideoAudioFx.none,
+    this.speed = 1.0,
+    this.transition = VideoTransitionType.none,
+  });
+
+  VideoSegmentEdits copyWith({
+    VideoCropPreset? crop,
+    VideoAudioFx? audioFx,
+    double? speed,
+    VideoTransitionType? transition,
+  }) {
+    return VideoSegmentEdits(
+      crop: crop ?? this.crop,
+      audioFx: audioFx ?? this.audioFx,
+      speed: speed ?? this.speed,
+      transition: transition ?? this.transition,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is VideoSegmentEdits &&
+        other.crop == crop &&
+        other.audioFx == audioFx &&
+        other.speed == speed &&
+        other.transition == transition;
+  }
+
+  @override
+  int get hashCode => Object.hash(crop, audioFx, speed, transition);
+}
+
+@immutable
+class VideoSegment {
+  final String id;
+  final String path;
+  final String? originalPath;
+  final double trimStartSec; // Start time in the original video
+  final double? originalDurationSec; // Duration of the original video
+  final String? previewPath;
+  final double durationSec;
+  final String? thumbnailPath;
+  final VideoSegmentEdits edits;
+
+  const VideoSegment({
+    required this.id,
+    required this.path,
+    this.originalPath,
+    this.trimStartSec = 0.0,
+    this.originalDurationSec,
+    this.previewPath,
+    required this.durationSec,
+    this.thumbnailPath,
+    this.edits = const VideoSegmentEdits(),
+  });
+
+  VideoSegment copyWith({
+    String? id,
+    String? path,
+    String? originalPath,
+    double? trimStartSec,
+    double? originalDurationSec,
+    String? previewPath,
+    double? durationSec,
+    String? thumbnailPath,
+    VideoSegmentEdits? edits,
+  }) {
+    return VideoSegment(
+      id: id ?? this.id,
+      path: path ?? this.path,
+      originalPath: originalPath ?? this.originalPath,
+      trimStartSec: trimStartSec ?? this.trimStartSec,
+      originalDurationSec: originalDurationSec ?? this.originalDurationSec,
+      previewPath: previewPath ?? this.previewPath,
+      durationSec: durationSec ?? this.durationSec,
+      thumbnailPath: thumbnailPath ?? this.thumbnailPath,
+      edits: edits ?? this.edits,
+    );
+  }
+}

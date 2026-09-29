@@ -1,0 +1,336 @@
+class ProfessionalStatsModel {
+  ProfessionalStatsModel({this.status, this.message, this.data});
+
+  bool? status;
+  String? message;
+  Map<String, dynamic>? data;
+
+  Map<String, dynamic> get _root => data ?? const {};
+
+  dynamic _readAny(List<String> keys, {Map<String, dynamic>? from}) {
+    final m = from ?? _root;
+    for (final k in keys) {
+      if (m.containsKey(k)) return m[k];
+    }
+    return null;
+  }
+
+  Map<String, dynamic> _readMapAny(List<String> keys, {Map<String, dynamic>? from}) {
+    final v = _readAny(keys, from: from);
+    if (v is Map<String, dynamic>) return v;
+    if (v is Map) return v.cast<String, dynamic>();
+    return const {};
+  }
+
+  num? _toNumNullable(dynamic v) {
+    if (v == null) return null;
+    if (v is num) return v;
+    final s = '$v'.trim();
+    if (s.isEmpty) return null;
+    return num.tryParse(s);
+  }
+
+  num? _numFromMaps(List<Map<String, dynamic>> maps, List<String> keys) {
+    for (final m in maps) {
+      final v = _toNumNullable(_readAny(keys, from: m));
+      if (v != null) return v;
+    }
+    return null;
+  }
+
+  factory ProfessionalStatsModel.fromJson(Map<String, dynamic> json) {
+    return ProfessionalStatsModel(
+      status: json['status'] as bool?,
+      message: json['message'] as String?,
+      data: (json['data'] as Map?)?.cast<String, dynamic>(),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'status': status,
+        'message': message,
+        if (data != null) 'data': data,
+      };
+
+  // Helper getters (nullable-safe) for common fields backend may send
+  Map<String, dynamic> get _stats => (data?['stats'] as Map?)?.cast<String, dynamic>() ?? const {};
+  Map<String, dynamic> get _earnings => (data?['earnings'] as Map?)?.cast<String, dynamic>() ?? const {};
+  Map<String, dynamic> get _targets => (data?['targets'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+  Map<String, dynamic> get _rates => _readMapAny(const ['rates', 'rate', 'point_rates', 'pointRates', 'mining_rates', 'miningRates', 'mining', 'pointRate', 'miner_rates', 'minerRates', 'earning_rates', 'earningRates']);
+  Map<String, dynamic> get _conversion => _readMapAny(const ['conversion', 'conversions', 'convert', 'token_conversion', 'tokenConversion', 'economy', 'economy_rates', 'economyRates', 'tokens', 'credits', 'exchange', 'exchange_rates', 'exchangeRates', 'value_conversion', 'valueConversion']);
+
+  int get likes => int.tryParse('${_stats['total_likes'] ?? data?['likes'] ?? 0}') ?? 0;
+  int get views => int.tryParse('${_stats['total_views'] ?? data?['views'] ?? 0}') ?? 0;
+  int get comments => int.tryParse('${_stats['total_comments'] ?? data?['comments'] ?? 0}') ?? 0;
+  // Miner points (backend: stats.mining_points)
+  int get points => int.tryParse('${_stats['mining_points'] ?? _stats['points'] ?? data?['points'] ?? 0}') ?? 0;
+  int get coins => int.tryParse('${_stats['coins'] ?? data?['coins'] ?? 0}') ?? 0;
+  num get earnings => num.tryParse('${_earnings['total_earnings'] ?? data?['earnings'] ?? 0}') ?? 0;
+
+  // Targets (backend guide uses: posts/likes/views/comments)
+  int get requiredPosts => int.tryParse('${_targets['posts'] ?? _targets['required_posts'] ?? 0}') ?? 0;
+  int get requiredLikes => int.tryParse('${_targets['likes'] ?? _targets['required_likes'] ?? 0}') ?? 0;
+  int get requiredViews => int.tryParse('${_targets['views'] ?? _targets['required_views'] ?? 0}') ?? 0;
+  int get requiredComments => int.tryParse('${_targets['comments'] ?? _targets['required_comments'] ?? 0}') ?? 0;
+  bool get targetsComplete =>
+      (likes >= requiredLikes) && (views >= requiredViews) && (comments >= requiredComments);
+
+  String get monetizationStatus => '${data?['monetization_status'] ?? ''}';
+
+  String get professionalType {
+    dynamic raw = data?['professional_type'] ??
+        data?['type'] ??
+        data?['professionalType'] ??
+        data?['dashboard_type'] ??
+        data?['user_type'] ??
+        data?['userType'];
+
+    if (raw == null) {
+      final user = data?['user'];
+      if (user is Map) {
+        raw = user['professional_type'] ??
+            user['type'] ??
+            user['user_type'] ??
+            user['userType'] ??
+            user['dashboard_type'];
+      }
+    }
+
+    if (raw == null) {
+      final profile = data?['profile'];
+      if (profile is Map) {
+        raw = profile['professional_type'] ??
+            profile['type'] ??
+            profile['user_type'] ??
+            profile['userType'] ??
+            profile['dashboard_type'];
+      }
+    }
+
+    final v = '${raw ?? ''}'.trim();
+    if (v.isEmpty) return 'creator';
+    return v;
+  }
+
+  bool get isMinerOnly => professionalType == 'miner';
+
+  bool get canShowMonetization {
+    // Monetization is meaningful for creator/business/creator_miner. Miner-only should not see it.
+    return !isMinerOnly;
+  }
+  bool get professionalEnabled {
+    final v = data?['professional_enabled'];
+    if (v is num) return v != 0;
+    if (v is bool) return v;
+    return ('${v ?? ''}').toLowerCase() == 'true';
+  }
+
+  DateTime? get professionalOffAt {
+    final v = data?['professional_off_at'];
+    if (v == null) return null;
+    if (v is int) {
+      // seconds or milliseconds
+      final ms = v > 1000000000000 ? v : v * 1000;
+      return DateTime.fromMillisecondsSinceEpoch(ms);
+    }
+    if (v is num) {
+      final i = v.toInt();
+      final ms = i > 1000000000000 ? i : i * 1000;
+      return DateTime.fromMillisecondsSinceEpoch(ms);
+    }
+    return DateTime.tryParse('$v');
+  }
+
+  DateTime? get canEnableAgainAt {
+    final offAt = professionalOffAt;
+    if (offAt == null) return null;
+    return offAt.add(const Duration(days: 7));
+  }
+
+  Duration? get remainingCooldown {
+    final enableAt = canEnableAgainAt;
+    if (enableAt == null) return null;
+    final diff = enableAt.difference(DateTime.now());
+    if (diff.isNegative) return Duration.zero;
+    return diff;
+  }
+
+  bool get cooldownActive {
+    final r = remainingCooldown;
+    if (r == null) return false;
+    return r > Duration.zero;
+  }
+  // Fallback: eligible if professional is enabled
+  bool get monetizationEligible => professionalEnabled;
+
+  num? get likePoints => _numFromMaps(
+        [_rates, _stats, _root, data ?? const {}],
+        const [
+          'like_points',
+          'likePoints',
+          'points_per_like',
+          'pointsPerLike',
+          'like_point',
+          'likePoint',
+          'point_per_like',
+          'pointPerLike',
+          'like_reward',
+          'likeReward',
+          'reward_like',
+          'rewardLike',
+          'like',
+        ],
+      ) ?? 1; // Default: 1 point per like
+
+  num? get viewPoints => _numFromMaps(
+        [_rates, _stats, _root, data ?? const {}],
+        const [
+          'view_points',
+          'viewPoints',
+          'watch_points',
+          'watchPoints',
+          'points_per_view',
+          'pointsPerView',
+          'points_per_watch',
+          'pointsPerWatch',
+          'view_point',
+          'viewPoint',
+          'watch_point',
+          'watchPoint',
+          'point_per_view',
+          'pointPerView',
+          'point_per_watch',
+          'pointPerWatch',
+          'view_reward',
+          'viewReward',
+          'watch_reward',
+          'watchReward',
+          'reward_view',
+          'rewardView',
+          'view',
+          'watch',
+        ],
+      ) ?? 2; // Default: 2 points per view
+
+  num? get commentPoints => _numFromMaps(
+        [_rates, _stats, _root, data ?? const {}],
+        const [
+          'comment_points',
+          'commentPoints',
+          'points_per_comment',
+          'pointsPerComment',
+          'comment_point',
+          'commentPoint',
+          'point_per_comment',
+          'pointPerComment',
+          'comment_reward',
+          'commentReward',
+          'reward_comment',
+          'rewardComment',
+          'comment',
+        ],
+      ) ?? 3; // Default: 3 points per comment
+
+  num? get pointsPerToken => _numFromMaps(
+        [_conversion, _root, data ?? const {}],
+        const [
+          'points_per_token',
+          'pointsPerToken',
+          'point_per_token',
+          'pointPerToken',
+          'points_to_token',
+          'pointsToToken',
+          'point_to_token',
+          'pointToToken',
+          'token_points',
+          'tokenPoints',
+        ],
+      ) ?? 100; // Default: 100 points = 1 token
+
+  num? get tokenPerPoint => _numFromMaps(
+        [_conversion, _root, data ?? const {}],
+        const [
+          'token_per_point',
+          'tokenPerPoint',
+          'tokens_per_point',
+          'tokensPerPoint',
+          'token_from_point',
+          'tokenFromPoint',
+          'tokens_from_point',
+          'tokensFromPoint',
+          'point_value',
+          'pointValue',
+        ],
+      ) ?? 0.01; // Default: 1 point = 0.01 token (1/100)
+
+  num? get creditsPerToken => _numFromMaps(
+        [_conversion, _root, data ?? const {}],
+        const [
+          'credits_per_token',
+          'creditsPerToken',
+          'credit_per_token',
+          'creditPerToken',
+          'credits_to_token',
+          'creditsToToken',
+          'credit_to_token',
+          'creditToToken',
+          'token_credits',
+          'tokenCredits',
+        ],
+      ) ?? 10; // Default: 1 token = 10 credits
+
+  num? get tokenPerCredit => _numFromMaps(
+        [_conversion, _root, data ?? const {}],
+        const [
+          'token_per_credit',
+          'tokenPerCredit',
+          'token_per_credits',
+          'tokenPerCredits',
+          'tokens_per_credit',
+          'tokensPerCredit',
+          'tokens_per_credits',
+          'tokensPerCredits',
+          'credit_value',
+          'creditValue',
+        ],
+      ) ?? 0.1; // Default: 1 credit = 0.1 token
+
+  num? get tokenPerDollar => _numFromMaps(
+        [_conversion, _root, data ?? const {}],
+        const [
+          'token_per_dollar',
+          'tokenPerDollar',
+          'tokens_per_dollar',
+          'tokensPerDollar',
+          'token_per_usd',
+          'tokenPerUsd',
+          'tokens_per_usd',
+          'tokensPerUsd',
+          'usd_to_token',
+          'usdToToken',
+          'dollar_to_token',
+          'dollarToToken',
+          'tokens_per_1_usd',
+          'tokensPer1Usd',
+        ],
+      ) ?? 100; // Default: $1 = 100 tokens
+
+  num? get dollarPerToken => _numFromMaps(
+        [_conversion, _root, data ?? const {}],
+        const [
+          'dollar_per_token',
+          'dollarPerToken',
+          'usd_per_token',
+          'usdPerToken',
+          'value_per_token',
+          'valuePerToken',
+          'token_value_usd',
+          'tokenValueUsd',
+          'token_price',
+          'tokenPrice',
+          'token_worth',
+          'tokenWorth',
+        ],
+      ) ?? 0.01; // Default: 1 token = $0.01 USD
+}

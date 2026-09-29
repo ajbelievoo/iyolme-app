@@ -1,0 +1,31 @@
+Å{ÅÉÉúÄèfile:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/pretty_qr_code-3.6.0/lib/src/painting/extensions/pretty_qr_module_extensions.dartÉïimport 'package:flutter/painting.dart';
+
+import 'package:pretty_qr_code/src/base/pretty_qr_module.dart';
+import 'package:pretty_qr_code/src/rendering/pretty_qr_painting_context.dart';
+
+/// Extension that apply to QR module.
+extension PrettyQrModuleExtension on PrettyQrModule {
+  /// Returns this QR code module as floating-point rectangle with given offset.
+  @pragma('vm:prefer-inline')
+  Rect toRect(
+    final double dimension, [
+    final Offset offset = Offset.zero,
+  ]) {
+    return Rect.fromLTWH(
+      offset.dx + dimension * x,
+      offset.dy + dimension * y,
+      dimension,
+      dimension,
+    );
+  }
+
+  /// Convert this instance into a floating-point rectangle whose coordinates
+  /// are relative to a given QR code.
+  @pragma('vm:prefer-inline')
+  Rect resolveRect(
+    final PrettyQrPaintingContext context,
+  ) {
+    return toRect(context.moduleDimension, context.estimatedBounds.topLeft);
+  }
+}
+ 

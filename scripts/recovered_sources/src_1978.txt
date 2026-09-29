@@ -1,0 +1,18 @@
+ò√Ø9ØCzfile:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/image-4.3.0/lib/src/formats/psd/effect/psd_bevel_effect.dartÅâimport 'psd_effect.dart';
+
+class PsdBevelEffect extends PsdEffect {
+  int? angle;
+  int? strength;
+  int? blur;
+  String? highlightBlendMode;
+  String? shadowBlendMode;
+  List<int>? highlightColor;
+  List<int>? shadowColor;
+  int? bevelStyle;
+  int? highlightOpacity;
+  int? shadowOpacity;
+  bool? globalAngle;
+  int? upOrDown;
+  List<int>? realHighlightColor;
+  List<int>? realShadowColor;
+}

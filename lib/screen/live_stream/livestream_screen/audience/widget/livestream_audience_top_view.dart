@@ -1,0 +1,274 @@
+import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:shortzz/common/extensions/common_extension.dart';
+import 'package:shortzz/common/extensions/string_extension.dart';
+import 'package:shortzz/common/manager/share_manager.dart';
+import 'package:shortzz/common/widget/custom_image.dart';
+import 'package:shortzz/common/widget/full_name_with_blue_tick.dart';
+import 'package:shortzz/common/widget/gradient_border.dart';
+import 'package:shortzz/model/livestream/livestream.dart';
+import 'package:shortzz/model/livestream/livestream_user_state.dart';
+import 'package:shortzz/screen/live_stream/livestream_screen/audience/widget/live_stream_user_info_sheet.dart';
+import 'package:shortzz/screen/live_stream/livestream_screen/host/widget/live_stream_host_top_view.dart';
+import 'package:shortzz/screen/live_stream/livestream_screen/livestream_screen_controller.dart';
+import 'package:shortzz/screen/live_stream/livestream_screen/widget/members_sheet.dart';
+import 'package:shortzz/screen/share_sheet_widget/share_sheet_widget.dart';
+import 'package:shortzz/utilities/asset_res.dart';
+import 'package:shortzz/utilities/style_res.dart';
+import 'package:shortzz/utilities/theme_res.dart';
+
+class LiveStreamAudienceTopView extends StatelessWidget {
+  final bool isAudience;
+  final LivestreamScreenController controller;
+
+  const LiveStreamAudienceTopView(
+      {super.key, this.isAudience = false, required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      bottom: false,
+      minimum: const EdgeInsets.only(top: 10),
+      child: Obx(() {
+        bool isVisible = controller.isViewVisible.value;
+        return AnimatedOpacity(
+          duration: const Duration(milliseconds: 100),
+          opacity: isVisible ? 1 : 0,
+          child: IgnorePointer(
+            ignoring: !isVisible,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 13.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                spacing: 5,
+                children: [
+                  _BuildHeaderView(controller: controller),
+                  _BuildBottomView(controller: controller)
+                ],
+              ),
+            ),
+          ),
+        );
+      }),
+    );
+  }
+}
+
+class _BuildHeaderView extends StatelessWidget {
+  final LivestreamScreenController controller;
+
+  const _BuildHeaderView({required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    return Obx(() {
+      final stream = controller.liveData.value;
+      final hostState = controller.liveUsersStates
+          .firstWhereOrNull((e) => e.userId == stream.hostId);
+      final hostUser = controller.firestoreController.users
+          .firstWhereOrNull((e) => e.userId == stream.hostId);
+
+      final isBattleRunning = stream.battleType != BattleType.initiate;
+      final isAudience =
+          stream.coHostIds?.contains(controller.myUserId) == false;
+      final isExitVisible = !(isBattleRunning && !isAudience);
+
+      final liveData = controller.liveData.value;
+      final isBattleOn = liveData.type == LivestreamType.battle;
+      final isCoHost = (stream.coHostIds ?? []).contains(controller.myUserId);
+      final count = liveData.watchingCount ?? 0;
+      final watchingCount = count >= 0 ? count : 0;
+
+      const int defaultLiveCreditMultiplier = 10;
+      final displayCredits = (hostState?.credits ?? 0) > 0
+          ? (hostState?.credits ?? 0)
+          : (hostState?.totalCoin ?? 0) * defaultLiveCreditMultiplier;
+      final coin = displayCredits.numberFormat;
+
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              spacing: 10,
+              children: [
+                InkWell(
+                  onTap: () {
+                    Get.bottomSheet(
+                      LiveStreamUserInfoSheet(
+                        isAudience: true,
+                        liveUser: hostUser,
+                        controller: controller,
+                      ),
+                      isScrollControlled: true,
+                    );
+                  },
+                  child: GradientBorder(
+                    strokeWidth: 2,
+                    gradient: StyleRes.themeGradient,
+                    radius: 30,
+                    child: Padding(
+                      padding: const EdgeInsets.all(1.5),
+                      child: CustomImage(
+                        size: const Size(40, 40),
+                        image: hostUser?.profile?.addBaseURL(),
+                        fit: BoxFit.cover,
+                        fullName: hostUser?.fullname,
+                      ),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    spacing: 6,
+                    children: [
+                      FullNameWithBlueTick(
+                        userId: hostUser?.userId,
+                        username: hostUser?.username,
+                        fontSize: 13,
+                        iconSize: 18,
+                        fontColor: whitePure(context),
+                        isVerify: hostUser?.isVerify,
+                      ),
+                      LiveStreamBorderButton(
+                        title: coin,
+                        imageIcon: AssetRes.icCredits,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            spacing: 6,
+            children: [
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    LiveStreamCircleBorderButton(
+                      image: AssetRes.icAudience,
+                      margin: EdgeInsets.zero,
+                      iconColor: whitePure(context),
+                      onTap: () {
+                        final myState = controller.liveUsersStates
+                            .firstWhereOrNull(
+                                (e) => e.userId == controller.myUserId);
+                        final isPrivileged = controller.isHost ||
+                            myState?.type == LivestreamUserType.coHost;
+                        Get.bottomSheet(
+                          MembersSheet(isHost: isPrivileged),
+                          isScrollControlled: true,
+                        );
+                      },
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(left: 5),
+                      child: LiveStreamCircleBorderButton(
+                        image: AssetRes.icShare,
+                        margin: EdgeInsets.zero,
+                        iconColor: whitePure(context),
+                        onTap: () {
+                          final hostId =
+                              (controller.liveData.value.hostId ?? 0);
+                          if (hostId <= 0) return;
+                          final link = ShareManager.shared
+                              .getLink(key: ShareKeys.live, value: hostId);
+                          Get.bottomSheet(
+                            ShareSheetWidget(
+                              onMoreTap: () {
+                                Get.back();
+                                ShareManager.shared.shareTheContent(
+                                  key: ShareKeys.live,
+                                  value: hostId,
+                                );
+                              },
+                              link: link,
+                              isDownloadShow: false,
+                              post: null,
+                              keys: ShareKeys.live,
+                              onCallBack: null,
+                              extraData: {
+                                'is_live_stream': true,
+                                'live_stream_id': hostId,
+                                'live_stream_image': hostUser?.profile,
+                                'live_stream_title':
+                                    'Live with ${hostUser?.fullname ?? "User"}',
+                              },
+                            ),
+                            isScrollControlled: true,
+                          );
+                        },
+                      ),
+                    ),
+                    if (isExitVisible)
+                      InkWell(
+                        onTap: controller.onCloseAudienceBtn,
+                        child: Container(
+                          height: 25,
+                          width: 25,
+                          margin: const EdgeInsets.only(left: 5),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: whitePure(context).withValues(alpha: .5),
+                              width: 1.5,
+                            ),
+                          ),
+                          alignment: Alignment.center,
+                          child: Image.asset(
+                            AssetRes.icLogout,
+                            color: whitePure(context).withValues(alpha: .5),
+                            width: 18,
+                            height: 18,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  LiveStreamBorderButton(
+                    title: watchingCount.numberFormat,
+                    imageIcon: AssetRes.icEye_2,
+                    imageColor: whitePure(context),
+                  ),
+                  if (!isBattleOn &&
+                      liveData.isRestrictToJoin == 0 &&
+                      !isCoHost)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 5),
+                      child: LiveStreamCircleBorderButton(
+                        image: AssetRes.icVideoRequest,
+                        margin: EdgeInsets.zero,
+                        iconColor: whitePure(context),
+                        onTap: () => controller.onVideoRequestSend(liveData),
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ],
+      );
+    });
+  }
+}
+
+class _BuildBottomView extends StatelessWidget {
+  final LivestreamScreenController controller;
+
+  const _BuildBottomView({required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    return const SizedBox();
+  }
+}

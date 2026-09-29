@@ -1,0 +1,95 @@
+jÌgfile:///E:/flutterapp_pro/lib/screen/live_stream/live_stream_search_screen/live_stream_feed_screen.dart‹Yimport 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:shortzz/model/livestream/livestream.dart';
+import 'package:shortzz/screen/live_stream/live_stream_search_screen/live_stream_search_screen_controller.dart';
+import 'package:shortzz/screen/live_stream/livestream_screen/audience/live_stream_audience_screen.dart';
+import 'package:shortzz/screen/live_stream/livestream_screen/livestream_screen_controller.dart';
+import 'package:shortzz/utilities/theme_res.dart';
+
+class LiveStreamFeedScreen extends StatefulWidget {
+  final LiveStreamSearchScreenController controller;
+  final int initialIndex;
+
+  const LiveStreamFeedScreen({
+    super.key,
+    required this.controller,
+    required this.initialIndex,
+  });
+
+  @override
+  State<LiveStreamFeedScreen> createState() => _LiveStreamFeedScreenState();
+}
+
+class _LiveStreamFeedScreenState extends State<LiveStreamFeedScreen> {
+  late final PageController _pageController;
+  int _currentIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentIndex = widget.initialIndex;
+    _pageController = PageController(initialPage: _currentIndex);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      try {
+        if (Get.isRegistered<LivestreamScreenController>()) {
+          Get.delete<LivestreamScreenController>(force: true);
+        }
+      } catch (_) {}
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  void _onPageChanged(int index) {
+    try {
+      if (Get.isRegistered<LivestreamScreenController>()) {
+        Get.delete<LivestreamScreenController>(force: true);
+      }
+    } catch (_) {}
+    setState(() {
+      _currentIndex = index;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: blackPure(context),
+      resizeToAvoidBottomInset: false,
+      body: Obx(() {
+        final list = widget.controller.livestreamFilterList;
+        if (list.isEmpty) {
+          return const SizedBox();
+        }
+        final safeIndex = _currentIndex.clamp(0, list.length - 1);
+        if (safeIndex != _currentIndex) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            setState(() => _currentIndex = safeIndex);
+            _pageController.jumpToPage(safeIndex);
+          });
+        }
+
+        return PageView.builder(
+          controller: _pageController,
+          scrollDirection: Axis.vertical,
+          onPageChanged: _onPageChanged,
+          itemCount: list.length,
+          itemBuilder: (ctx, index) {
+            final Livestream stream = list[index];
+            if (index != _currentIndex) {
+              return const SizedBox.expand();
+            }
+            return LiveStreamAudienceScreen(livestream: stream, isHost: false);
+          },
+        );
+      }),
+    );
+  }
+}
+`

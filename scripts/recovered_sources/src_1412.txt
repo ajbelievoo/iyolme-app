@@ -1,0 +1,21 @@
+Äëfile:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_widget_from_html_core-0.17.2/lib/src/data/inherited_properties/shadows.dartÅ‹part of '../../core_data.dart';
+
+TextStyle _prepareShadows(TextStyle style, InheritedProperties resolved) {
+  final property = resolved.get<TextStyleShadows>();
+  if (property == null) {
+    return style;
+  }
+
+  final shadows = property.value
+      .map((shadow) => shadow.getValue(resolved))
+      .whereType<Shadow>()
+      .toList();
+  if (shadows.isEmpty) {
+    return style;
+  }
+
+  return style.copyWith(
+    debugLabel: 'fwfh: text-shadow',
+    shadows: shadows,
+  );
+}

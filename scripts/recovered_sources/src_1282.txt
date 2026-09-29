@@ -1,0 +1,14 @@
+€§file:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_local_notifications-19.5.0/lib/src/platform_specifics/android/styles/media_style_information.dart‚import 'default_style_information.dart';
+
+/// Used to pass the content for an Android notification displayed using the
+/// media style.
+///
+/// When used, the bitmap given to [AndroidNotificationDetails.largeIcon] will
+/// be treated as album artwork.
+class MediaStyleInformation extends DefaultStyleInformation {
+  /// Constructs an instance of [MediaStyleInformation].
+  const MediaStyleInformation({
+    bool htmlFormatContent = false,
+    bool htmlFormatTitle = false,
+  }) : super(htmlFormatContent, htmlFormatTitle);
+}

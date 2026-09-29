@@ -1,0 +1,12 @@
+~file:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/fl_chart-0.70.2/lib/src/extensions/fl_titles_data_extension.dartðimport 'package:fl_chart/fl_chart.dart';
+import 'package:fl_chart/src/extensions/side_titles_extension.dart';
+import 'package:flutter/widgets.dart';
+
+extension FlTitlesDataExtension on FlTitlesData {
+  EdgeInsets get allSidesPadding => EdgeInsets.only(
+        left: show ? leftTitles.totalReservedSize : 0.0,
+        top: show ? topTitles.totalReservedSize : 0.0,
+        right: show ? rightTitles.totalReservedSize : 0.0,
+        bottom: show ? bottomTitles.totalReservedSize : 0.0,
+      );
+}

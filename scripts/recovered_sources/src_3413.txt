@@ -1,0 +1,300 @@
+i¡bfile:///E:/flutterapp_pro/lib/screen/professional_dashboard_screen/enable_professional_screen.dart©çimport 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:shortzz/common/controller/base_controller.dart';
+import 'package:shortzz/common/controller/professional_controller.dart';
+import 'package:shortzz/common/service/subscription/subscription_manager.dart';
+import 'package:shortzz/screen/subscription_screen/subscription_screen.dart';
+import 'package:shortzz/utilities/theme_res.dart';
+
+class EnableProfessionalScreen extends StatefulWidget {
+  const EnableProfessionalScreen({super.key, this.controller});
+  final ProfessionalController? controller;
+
+  @override
+  State<EnableProfessionalScreen> createState() => _EnableProfessionalScreenState();
+}
+
+class _EnableProfessionalScreenState extends State<EnableProfessionalScreen> {
+  final _formKey = GlobalKey<FormState>();
+
+  // types: creator | miner | business | creator_miner
+  String type = 'creator';
+  final nameCtrl = TextEditingController();
+
+  @override
+  void dispose() {
+    nameCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<bool> _ensureSubscriptionForCreatorMiner() async {
+    if (type != 'creator_miner') return true;
+
+    final status = await SubscriptionManager.shared.checkSubscriptionStatus();
+    if (status == true) return true;
+
+    if (!mounted) return false;
+
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('Subscription required'),
+          content: const Text(
+            'Creator + Miner type requires an active subscription to enable.\n\nDo you want to subscribe now?',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+            ElevatedButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Subscribe')),
+          ],
+        );
+      },
+    );
+
+    if (go != true) return false;
+
+    final purchased = await Get.to<bool>(() => const SubscriptionScreen());
+
+    if (!mounted) return false;
+    if (purchased == true) {
+      final after = await SubscriptionManager.shared.checkSubscriptionStatus();
+      return after == true;
+    }
+    return false;
+  }
+
+  bool get needsName =>
+      type == 'creator' || type == 'business' || type == 'creator_miner' || type == 'astrologer';
+
+  String _formatRemaining(Duration d) {
+    final days = d.inDays;
+    final hours = d.inHours.remainder(24);
+    final minutes = d.inMinutes.remainder(60);
+    if (days > 0) return '${days}d ${hours}h ${minutes}m';
+    if (hours > 0) return '${hours}h ${minutes}m';
+    return '${minutes}m';
+  }
+
+  Future<void> _showCooldownPopup(Duration remaining) async {
+    await showDialog(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('Please wait'),
+          content: Text(
+            'You can enable professional again after 7 days.\n\nRemaining: ${_formatRemaining(remaining)}',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('OK')),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _showEnabledPopup({required String title, required String message}) async {
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return Dialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.06),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(Icons.verified_outlined, size: 20),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(title,
+                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Text(message, style: const TextStyle(fontSize: 13, height: 1.35)),
+                const SizedBox(height: 14),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(),
+                    child: const Text('Continue'),
+                  ),
+                )
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _submit() async {
+    final ProfessionalController ctrl =
+        widget.controller ?? Get.put(ProfessionalController());
+    final s = ctrl.stats.value;
+    if ((s?.cooldownActive ?? false) && (s?.remainingCooldown != null)) {
+      await _showCooldownPopup(s!.remainingCooldown!);
+      return;
+    }
+    final enteredName = nameCtrl.text.trim();
+    if (needsName && enteredName.isEmpty) {
+      BaseController.share.showSnackBar('Please enter name');
+      return;
+    }
+    if (needsName && enteredName.length < 3) {
+      BaseController.share.showSnackBar('Name must be at least 3 characters');
+      return;
+    }
+
+    final okSub = await _ensureSubscriptionForCreatorMiner();
+    if (!okSub) {
+      return;
+    }
+
+    BaseController.share.showLoader(barrierDismissible: false);
+    try {
+      final res = await ctrl.enableProfessional(
+        type: type,
+        name: needsName ? enteredName : null,
+      );
+      BaseController.share.stopLoader();
+      if (res.status == true) {
+        // Success animation/banner
+        await ctrl.fetchAll();
+        await _showEnabledPopup(
+          title: 'Professional enabled',
+          message: 'Your dashboard is now active. Complete targets to unlock monetization.',
+        );
+        Get.back(); // return to dashboard
+      } else {
+        BaseController.share.showSnackBar(res.message ?? 'Something went wrong');
+      }
+    } catch (e) {
+      BaseController.share.stopLoader();
+      final msg = e.toString();
+      // Backend sometimes updates DB but returns 500; keep UX smooth.
+      if (msg.contains('500') || msg.toLowerCase().contains('internal server error')) {
+        ctrl.localProfessionalEnabled.value = true;
+        await _showEnabledPopup(
+          title: 'Professional enabled',
+          message: 'You are activated. Dashboard data will sync shortly.',
+        );
+        Get.back();
+        return;
+      }
+      BaseController.share.showSnackBar(msg);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ProfessionalController ctrl =
+        widget.controller ?? Get.put(ProfessionalController());
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: scaffoldBackgroundColor(context),
+        foregroundColor: textDarkGrey(context),
+        elevation: 0.5,
+        title: Text(
+          'Enable Professional',
+          style: TextStyle(color: textDarkGrey(context)),
+        ),
+        iconTheme: IconThemeData(color: textDarkGrey(context)),
+      ),
+      body: Form(
+        key: _formKey,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            Obx(() {
+              final s = ctrl.stats.value;
+              if ((s?.cooldownActive ?? false) && (s?.remainingCooldown != null)) {
+                return Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.orange.withValues(alpha: 0.25)),
+                  ),
+                  child: Text(
+                    'You can enable professional again after 7 days.\nRemaining: ${_formatRemaining(s!.remainingCooldown!)}',
+                    style: const TextStyle(fontSize: 13, height: 1.3),
+                  ),
+                );
+              }
+              return const SizedBox.shrink();
+            }),
+            const SizedBox(height: 12),
+            const Text('Choose Type'),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              children: [
+                _chip('creator', 'Creator'),
+                _chip('miner', 'Miner'),
+                _chip('astrologer', 'Astrologer'),
+                _chip('business', 'Business'),
+                _chip('creator_miner', 'Creator + Miner'),
+              ],
+            ),
+            const SizedBox(height: 16),
+            if (needsName)
+              TextFormField(
+                controller: nameCtrl,
+                decoration: InputDecoration(
+                  labelText: type == 'business'
+                      ? 'Business Name'
+                      : (type == 'astrologer' ? 'Astrologer Name' : 'Creator Name'),
+                ),
+              ),
+            const SizedBox(height: 24),
+            SizedBox(
+              height: 48,
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                onPressed: _submit,
+                child: const Text('Enable'),
+              ),
+            )
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _chip(String key, String label) {
+    final selected = type == key;
+    return FilterChip(
+      label: Text(
+        label,
+        style: TextStyle(color: selected ? Colors.white : Colors.black.withValues(alpha: 0.85)),
+      ),
+      selected: selected,
+      selectedColor: themeAccentSolid(Get.context ?? Get.overlayContext ?? Get.context!),
+      backgroundColor: Colors.black.withValues(alpha: 0.04),
+      side: BorderSide(
+        color: selected
+            ? Colors.black.withValues(alpha: 0.18)
+            : Colors.black.withValues(alpha: 0.10),
+      ),
+      onSelected: (_) => setState(() => type = key),
+    );
+  }
+}
+Å-

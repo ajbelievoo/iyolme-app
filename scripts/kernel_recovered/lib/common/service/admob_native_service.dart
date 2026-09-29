@@ -1,0 +1,304 @@
+import 'dart:developer';
+import 'dart:io';
+
+import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:google_mobile_ads/google_mobile_ads.dart';
+import 'package:shortzz/common/manager/session_manager.dart';
+import 'package:shortzz/common/service/api/api_service.dart';
+import 'package:shortzz/common/service/utils/web_service.dart';
+import 'package:shortzz/model/admob/admob_native_models.dart';
+import 'package:shortzz/common/manager/logger.dart';
+
+/// Service for managing AdMob Native Ads in the feed
+class AdMobNativeService extends GetxService {
+  static AdMobNativeService get instance => Get.find<AdMobNativeService>();
+
+  final Rx<AdMobNativeConfig> config = AdMobNativeConfig().obs;
+  final RxBool isLoading = false.obs;
+  final RxInt adsShownThisSession = 0.obs;
+  
+  // Cache for loaded native ads
+  final Map<int, NativeAd> _loadedAds = {};
+  final Set<int> _failedAdIndices = {};
+  
+  DateTime? _lastAdShownTime;
+
+  @override
+  void onInit() {
+    super.onInit();
+    fetchConfig();
+  }
+
+  /// Fetch AdMob configuration from backend
+  Future<void> fetchConfig() async {
+    Loggers.info('[AdMobNative] ============================================');
+    Loggers.info('[AdMobNative] fetchConfig() CALLED - Starting API call');
+    Loggers.info('[AdMobNative] API URL: ${WebService.admob.publicSettings}');
+    try {
+      isLoading.value = true;
+      Loggers.info('[AdMobNative] Making API call...');
+      final response = await ApiService.instance.get(
+        url: WebService.admob.publicSettings,
+        fromJson: (json) {
+          Loggers.info('[AdMobNative] RAW JSON RESPONSE: $json');
+          final data = json['data'] ?? {};
+          Loggers.info('[AdMobNative] DATA: $data');
+          return AdMobNativeConfig.fromJson(data);
+        },
+      );
+      config.value = response;
+      Loggers.info('[AdMobNative] Config fetched SUCCESSFULLY');
+      Loggers.info('[AdMobNative] >> nativeAdUnitIdAndroid: ${config.value.nativeAdUnitIdAndroid}');
+      Loggers.info('[AdMobNative] >> nativeAdUnitIdIos: ${config.value.nativeAdUnitIdIos}');
+      Loggers.info('[AdMobNative] >> interstitialAdUnitIdAndroid: ${config.value.interstitialAdUnitIdAndroid}');
+      Loggers.info('[AdMobNative] >> rewardedAdUnitIdAndroid: ${config.value.rewardedAdUnitIdAndroid}');
+      Loggers.info('[AdMobNative] >> testMode: ${config.value.testMode}');
+      Loggers.info('[AdMobNative] >> isEnabled: ${config.value.isEnabled}');
+    } catch (e, stack) {
+      Loggers.info('[AdMobNative] ERROR fetching config: $e');
+      Loggers.info('[AdMobNative] Stack: $stack');
+      _useFallbackConfig();
+    } finally {
+      isLoading.value = false;
+      Loggers.info('[AdMobNative] ============================================');
+    }
+  }
+
+  /// Use fallback config from main Settings model when AdMob API fails
+  void _useFallbackConfig() {
+    Loggers.info('[AdMobNative] Using FALLBACK config (API failed)');
+    final setting = SessionManager.instance.getSettings();
+    final platformEnabled = Platform.isAndroid
+        ? (setting?.admobAndroidStatus == 1)
+        : Platform.isIOS && (setting?.admobIosStatus == 1);
+    
+    // Use TEST ad unit IDs as fallback since server API failed
+    // Native ads need native ad unit IDs, not banner IDs
+    final testAdId = _getTestAdUnitId();
+    
+    config.value = AdMobNativeConfig(
+      isEnabled: platformEnabled,
+      adInterval: 5, // Show ad every 5 posts
+      nativeAdUnitIdAndroid: testAdId,
+      nativeAdUnitIdIos: testAdId,
+      maxAdsPerSession: 100,
+      adRepeatIntervalMinutes: 0,
+      testMode: true, // Mark as test mode since we're using test IDs
+    );
+    Loggers.info('[AdMobNative] Fallback config: enabled=$platformEnabled, testMode=true');
+    Loggers.info('[AdMobNative] Fallback adUnitId: $testAdId');
+  }
+
+  /// Check if AdMob native ads are enabled
+  bool get isEnabled {
+    final setting = SessionManager.instance.getSettings();
+    final platformEnabled = Platform.isAndroid 
+        ? (setting?.admobAndroidStatus == 1)
+        : Platform.isIOS && (setting?.admobIosStatus == 1);
+    
+    // For testing: if config says enabled, use that
+    // If platform settings block it, respect that too
+    final result = config.value.isEnabled && (platformEnabled || config.value.testMode);
+    
+    log('[AdMobNative] isEnabled check: config.enabled=${config.value.isEnabled}, platformEnabled=$platformEnabled, testMode=${config.value.testMode}, result=$result');
+    
+    return result;
+  }
+
+  /// Check if we should show an ad at this position
+  bool shouldShowAdAtIndex(int index, int totalPosts) {
+    if (!isEnabled) return false;
+    if (_failedAdIndices.contains(index)) return false;
+    if (adsShownThisSession.value >= config.value.maxAdsPerSession) return false;
+    
+    // Check ad repeat interval
+    if (_lastAdShownTime != null) {
+      final minutesSinceLastAd = DateTime.now().difference(_lastAdShownTime!).inMinutes;
+      if (minutesSinceLastAd < config.value.adRepeatIntervalMinutes) {
+        return false;
+      }
+    }
+    
+    // Show ad every N posts
+    final interval = config.value.adInterval;
+    if (interval <= 0) return false;
+    
+    // Insert ad after every interval posts (e.g., at positions 4, 9, 14 for interval=5)
+    return (index + 1) % (interval + 1) == 0;
+  }
+
+  /// Load a native ad for the given index
+  Future<NativeAd?> loadNativeAd(int index, {Function(NativeAd)? onLoaded, Function? onFailed, bool forceRetry = false}) async {
+    log('[AdMobNative] loadNativeAd called for index $index');
+    
+    if (_loadedAds.containsKey(index)) {
+      log('[AdMobNative] Returning cached ad for index $index');
+      return _loadedAds[index];
+    }
+    
+    if (_failedAdIndices.contains(index) && !forceRetry) {
+      log('[AdMobNative] Ad previously failed for index $index, retrying anyway...');
+      _failedAdIndices.remove(index); // Remove from failed to allow retry
+    }
+
+    log('[AdMobNative] Checking ad unit ID...');
+    // Try real ID first, fallback to test if not available
+    final adUnitId = config.value.nativeAdUnitId ?? _getTestAdUnitId();
+    log('[AdMobNative] adUnitId from config: ${config.value.nativeAdUnitId}');
+    log('[AdMobNative] Final adUnitId: $adUnitId');
+    
+    if (adUnitId == null || adUnitId.isEmpty) {
+      log('[AdMobNative] No ad unit ID configured');
+      return null;
+    }
+    
+    log('[AdMobNative] Using ad unit ID: $adUnitId');
+
+    final nativeAd = NativeAd(
+      adUnitId: adUnitId,
+      request: const AdRequest(),
+      nativeTemplateStyle: NativeTemplateStyle(
+        templateType: TemplateType.medium,
+        mainBackgroundColor: const Color(0xFF000000),
+        cornerRadius: 12.0,
+        callToActionTextStyle: NativeTemplateTextStyle(
+          textColor: Colors.white,
+          backgroundColor: const Color(0xFF3897F0),
+          style: NativeTemplateFontStyle.monospace,
+          size: 14.0,
+        ),
+        primaryTextStyle: NativeTemplateTextStyle(
+          textColor: Colors.white,
+          backgroundColor: const Color(0xFF000000),
+          style: NativeTemplateFontStyle.normal,
+          size: 16.0,
+        ),
+        secondaryTextStyle: NativeTemplateTextStyle(
+          textColor: Colors.white70,
+          backgroundColor: const Color(0xFF000000),
+          style: NativeTemplateFontStyle.normal,
+          size: 14.0,
+        ),
+        tertiaryTextStyle: NativeTemplateTextStyle(
+          textColor: Colors.white54,
+          backgroundColor: const Color(0xFF000000),
+          style: NativeTemplateFontStyle.normal,
+          size: 12.0,
+        ),
+      ),
+      listener: NativeAdListener(
+        onAdLoaded: (ad) {
+          log('[AdMobNative] Ad loaded for index $index');
+          _loadedAds[index] = ad as NativeAd;
+          onLoaded?.call(ad);
+        },
+        onAdFailedToLoad: (ad, error) {
+          log('[AdMobNative] Ad failed to load at index $index: ${error.message} (code: ${error.code})');
+          ad.dispose();
+          // Don't permanently mark as failed - allow retry on next scroll
+          // _failedAdIndices.add(index);
+          onFailed?.call();
+        },
+        onAdClicked: (ad) {
+          log('[AdMobNative] Ad clicked at index $index');
+          _trackEvent('click', index);
+        },
+        onAdImpression: (ad) {
+          log('[AdMobNative] Ad impression at index $index');
+          adsShownThisSession.value++;
+          _lastAdShownTime = DateTime.now();
+          _trackEvent('impression', index);
+        },
+      ),
+    );
+
+    try {
+      log('[AdMobNative] Calling nativeAd.load() for index $index');
+      await nativeAd.load();
+      log('[AdMobNative] nativeAd.load() completed for index $index');
+      return nativeAd;
+    } catch (e) {
+      log('[AdMobNative] Exception loading ad at index $index: $e');
+      // Don't permanently mark as failed - allow retry
+      // _failedAdIndices.add(index);
+      return null;
+    }
+  }
+
+  /// Get a cached native ad
+  NativeAd? getCachedAd(int index) {
+    return _loadedAds[index];
+  }
+
+  /// Dispose a specific native ad
+  void disposeAd(int index) {
+    final ad = _loadedAds.remove(index);
+    ad?.dispose();
+  }
+
+  /// Preload ads for upcoming indices
+  Future<void> preloadAds(int currentIndex, int count) async {
+    if (!isEnabled) return;
+    
+    for (int i = 1; i <= count; i++) {
+      final targetIndex = currentIndex + i;
+      if (shouldShowAdAtIndex(targetIndex, targetIndex + 10)) {
+        if (!_loadedAds.containsKey(targetIndex) && !_failedAdIndices.contains(targetIndex)) {
+          await loadNativeAd(targetIndex);
+        }
+      }
+    }
+  }
+
+  /// Track AdMob event to backend
+  Future<void> _trackEvent(String eventType, int index) async {
+    try {
+      await ApiService.instance.call(
+        url: WebService.admob.trackEvent,
+        param: {
+          'event_type': eventType,
+          'placement': 'reels',
+          'ad_index': index,
+        },
+        fromJson: (json) => json,
+      );
+    } catch (e) {
+      log('[AdMobNative] Error tracking event: $e');
+    }
+  }
+
+  /// Get failed ad indices for debugging
+  Set<int> get failedIndices => Set.unmodifiable(_failedAdIndices);
+  
+  /// Clear failed indices to allow retry
+  void clearFailedIndices() {
+    _failedAdIndices.clear();
+    log('[AdMobNative] Cleared failed ad indices');
+  }
+
+  /// Clear all cached ads
+  void clearAllAds() {
+    for (final ad in _loadedAds.values) {
+      ad.dispose();
+    }
+    _loadedAds.clear();
+    _failedAdIndices.clear();
+  }
+
+  @override
+  void onClose() {
+    clearAllAds();
+    super.onClose();
+  }
+  
+  /// Get test ad unit ID for development
+  String? _getTestAdUnitId() {
+    if (Platform.isAndroid) {
+      return 'ca-app-pub-3940256099942544/2247696110'; // Google test native ad
+    } else if (Platform.isIOS) {
+      return 'ca-app-pub-3940256099942544/3986624511'; // Google test native ad
+    }
+    return null;
+  }
+}

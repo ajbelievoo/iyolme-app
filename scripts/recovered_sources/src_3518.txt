@@ -1,0 +1,17 @@
+gfile:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/sqflite-2.4.1/lib/src/exception_impl.dartÅ⁄import 'package:sqflite/src/services_impl.dart';
+import 'package:sqflite/src/sqflite_import.dart';
+
+/// Wrap any exception to a [DatabaseException]
+Future<T> wrapDatabaseException<T>(Future<T> Function() action) async {
+  try {
+    final result = await action();
+    return result;
+  } on PlatformException catch (e) {
+    if (e.code == sqliteErrorCode) {
+      throw SqfliteDatabaseException(e.message!, e.details);
+      //rethrow;
+    } else {
+      rethrow;
+    }
+  }
+}

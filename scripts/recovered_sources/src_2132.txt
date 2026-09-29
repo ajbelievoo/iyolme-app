@@ -1,0 +1,17 @@
+€žfile:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/in_app_purchase_platform_interface-1.4.0/lib/src/in_app_purchase_platform_addition_provider.dart‚ó// Copyright 2013 The Flutter Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+import 'in_app_purchase_platform_addition.dart';
+
+/// The [InAppPurchasePlatformAdditionProvider] is responsible for providing
+/// a platform-specific [InAppPurchasePlatformAddition].
+///
+/// [InAppPurchasePlatformAddition] implementation contain platform-specific
+/// features that are not available from the platform idiomatic
+/// [InAppPurchasePlatform] API.
+abstract class InAppPurchasePlatformAdditionProvider {
+  /// Provides a platform-specific implementation of the [InAppPurchasePlatformAddition]
+  /// class.
+  T getPlatformAddition<T extends InAppPurchasePlatformAddition?>();
+}

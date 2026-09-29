@@ -1,0 +1,21 @@
+îkînê§{file:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/fl_chart-0.70.2/lib/src/chart/pie_chart/pie_chart_helper.dartÇqimport 'package:fl_chart/src/chart/pie_chart/pie_chart_data.dart';
+import 'package:flutter/widgets.dart';
+
+extension PieChartSectionDataListExtension on List<PieChartSectionData> {
+  List<Widget> toWidgets() {
+    final widgets = List<Widget>.filled(length, Container());
+    var allWidgetsAreNull = true;
+    asMap().entries.forEach((e) {
+      final index = e.key;
+      final section = e.value;
+      if (section.badgeWidget != null) {
+        widgets[index] = section.badgeWidget!;
+        allWidgetsAreNull = false;
+      }
+    });
+    if (allWidgetsAreNull) {
+      return List.empty();
+    }
+    return widgets;
+  }
+}

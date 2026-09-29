@@ -1,0 +1,56 @@
+import 'dart:ui';
+
+import 'package:get/get.dart';
+import 'package:shortzz/common/manager/session_manager.dart';
+
+class SmartAssistController extends GetxController {
+  final RxBool smartSuggestionsEnabled = false.obs;
+  final RxBool voiceCommandsEnabled = false.obs;
+  VoidCallback? _cancelSmartSuggestions;
+  VoidCallback? _cancelVoiceCommands;
+
+  @override
+  void onInit() {
+    super.onInit();
+
+    smartSuggestionsEnabled.value =
+        SessionManager.instance.getSmartSuggestionsEnabled();
+    voiceCommandsEnabled.value = SessionManager.instance.getVoiceCommandsEnabled();
+
+    _cancelSmartSuggestions = SessionManager.instance.storage
+        .listenKey(SessionKeys.smartSuggestionsEnabled, (value) {
+      smartSuggestionsEnabled.value = (value ?? false) == true;
+    });
+
+    _cancelVoiceCommands = SessionManager.instance.storage
+        .listenKey(SessionKeys.voiceCommandsEnabled, (value) {
+      voiceCommandsEnabled.value = (value ?? false) == true;
+    });
+  }
+
+  @override
+  void onClose() {
+    _cancelSmartSuggestions?.call();
+    _cancelVoiceCommands?.call();
+    super.onClose();
+  }
+
+  Future<void> setSmartSuggestionsEnabled(bool enabled) async {
+    await SessionManager.instance.setSmartSuggestionsEnabled(enabled);
+    smartSuggestionsEnabled.value = enabled;
+
+    if (!enabled) {
+      await setVoiceCommandsEnabled(false);
+    }
+  }
+
+  Future<void> setVoiceCommandsEnabled(bool enabled) async {
+    await SessionManager.instance.setVoiceCommandsEnabled(enabled);
+    voiceCommandsEnabled.value = enabled;
+  }
+
+  bool get isSmartSuggestionsActive => smartSuggestionsEnabled.value;
+
+  bool get isVoiceCommandsActive =>
+      smartSuggestionsEnabled.value && voiceCommandsEnabled.value;
+}

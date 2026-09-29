@@ -1,0 +1,199 @@
+name: shortzz
+description: Shortzz - short video, live streaming and social app.
+publish_to: "none"
+version: 1.0.1+2043
+
+environment:
+  sdk: ">=3.7.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  app_links: 6.4.1
+  archive: 3.6.1
+  audio_session: 0.2.3
+  audio_waveforms: 1.3.0
+  cached_network_image: 3.4.1
+  cloud_firestore: 6.2.0
+  collection: 1.19.1
+  connectivity_plus: 7.1.0
+  csv: 6.0.0
+  cupertino_icons: 1.0.9
+  deepar_flutter_plus:
+    path: third_party/deepar_flutter_plus
+  detectable_text_field: 3.0.2
+  dismissible_page: 1.0.2
+  dotted_border: 3.1.0
+  expandable_page_view: 1.3.0
+  ffmpeg_kit_flutter_new_min_gpl: 2.3.2
+  figma_squircle_updated: 1.0.1
+  firebase_auth: 6.3.0
+  firebase_core: 4.6.0
+  firebase_messaging: 16.1.3
+  fl_chart: 0.70.2
+  flutter_cache_manager: 3.4.1
+  flutter_cashfree_pg_sdk: 2.3.2+49
+  flutter_dotenv: 5.2.1
+  flutter_image_compress: 2.4.0
+  flutter_keyboard_visibility: 6.0.0
+  flutter_linkify: 6.0.0
+  flutter_local_notifications: 19.5.0
+  flutter_native_video_trimmer: 1.1.9
+  flutter_staggered_grid_view: 0.7.0
+  flutter_stripe: 12.5.0
+  flutter_webrtc:
+    path: packages/flutter_webrtc
+  flutter_widget_from_html_core: 0.17.2
+  fluttertoast: 8.2.14
+  gal: 2.3.2
+  geocoding: 4.0.0
+  geolocator: 14.0.2
+  get: 4.7.3
+  get_storage: 2.1.1
+  google_fonts: 6.3.3
+  google_maps_flutter: 2.17.0
+  google_mlkit_barcode_scanning: 0.14.2
+  google_mobile_ads: 6.0.0
+  google_sign_in: 7.2.0
+  html: 0.15.6
+  http: 1.6.0
+  image: 4.3.0
+  image_picker: 1.2.1
+  in_app_purchase: 3.2.3
+  in_app_purchase_android: 0.4.0+10
+  internet_connection_checker_plus: 2.9.1+2
+  intl: 0.20.2
+  just_audio: 0.10.5
+  keyboard_avoider: 0.2.0
+  livekit_client:
+    path: packages/livekit_client
+  mime: 2.0.0
+  mobile_scanner: 6.0.2
+  path: 1.9.1
+  path_provider: 2.1.5
+  permission_handler: 11.4.0
+  photo_view: 0.15.0
+  pretty_qr_code: 3.6.0
+  proste_indexed_stack: 0.2.4
+  qr_code_scanner_plus: 2.1.1
+  razorpay_flutter: 1.4.4
+  readmore: 3.0.0
+  retrytech_plugin:
+    git:
+      url: https://gitlab.com/jeelkhokhariya59/retrytech_plugin.git
+      ref: master
+  rxdart: 0.28.0
+  share_plus: 12.0.2
+  shared_preferences: 2.5.5
+  shimmer: 3.0.0
+  sign_in_with_apple: 7.0.1
+  smooth_highlight: 0.1.2
+  speech_to_text: 7.3.0
+  svgaplayer_flutter: 2.2.0
+  url_launcher: 6.3.2
+  uuid: 4.5.3
+  vector_math: ^2.4.3
+  video_compress: 3.1.4
+  video_player: 2.11.1
+  visibility_detector: 0.4.0+2
+  wakelock_plus: 1.5.1
+  webview_flutter_plus: 0.4.20
+
+dependency_overrides:
+  flutter_webrtc:
+    path: packages/flutter_webrtc
+  http: 1.6.0
+  protobuf: 4.2.0
+  sqflite: 2.4.1
+  sqflite_android: 2.4.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: 4.0.0
+  flutter_launcher_icons: 0.14.4
+  flutter_native_splash: 2.4.4
+
+flutter:
+  uses-material-design: true
+  assets:
+    - .env
+    - assets/
+    - assets/audios/
+    - assets/csv/
+    - assets/deepar_builtin/
+    - assets/effects/
+    - assets/fonts/
+    - assets/icons/
+    - assets/images/
+    - assets/mediapipe/
+    - assets/models/
+    - assets/video/
+  fonts:
+    - family: Black
+      fonts:
+        - asset: assets/fonts/Outfit-Black.ttf
+    - family: ExtraBold
+      fonts:
+        - asset: assets/fonts/Outfit-ExtraBold.ttf
+    - family: Bold
+      fonts:
+        - asset: assets/fonts/Outfit-Bold.ttf
+    - family: SemiBold
+      fonts:
+        - asset: assets/fonts/Outfit-SemiBold.ttf
+    - family: Medium
+      fonts:
+        - asset: assets/fonts/Outfit-Medium.ttf
+    - family: Regular
+      fonts:
+        - asset: assets/fonts/Outfit-Regular.ttf
+    - family: Light
+      fonts:
+        - asset: assets/fonts/Outfit-Light.ttf
+    - family: ExtraLight
+      fonts:
+        - asset: assets/fonts/Outfit-ExtraLight.ttf
+    - family: Thin
+      fonts:
+        - asset: assets/fonts/Outfit-Thin.ttf
+    - family: Unbounded-Black
+      fonts:
+        - asset: assets/fonts/Unbounded-Black.ttf
+    - family: Unbounded-Bold
+      fonts:
+        - asset: assets/fonts/Unbounded-Bold.ttf
+    - family: Unbounded-ExtraBold
+      fonts:
+        - asset: assets/fonts/Unbounded-ExtraBold.ttf
+    - family: Unbounded-ExtraLight
+      fonts:
+        - asset: assets/fonts/Unbounded-ExtraLight.ttf
+    - family: Unbounded-Light
+      fonts:
+        - asset: assets/fonts/Unbounded-Light.ttf
+    - family: Unbounded-Medium
+      fonts:
+        - asset: assets/fonts/Unbounded-Medium.ttf
+    - family: Unbounded-Regular
+      fonts:
+        - asset: assets/fonts/Unbounded-Regular.ttf
+    - family: Unbounded-SemiBold
+      fonts:
+        - asset: assets/fonts/Unbounded-SemiBold.ttf
+
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: assets/icons/app_icon_opt.png
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: assets/icons/app_icon_opt.png
+  min_sdk_android: 26
+
+flutter_native_splash:
+  color: "#FFFFFF"
+  android: true
+  ios: false
+  web: false
+  android_12:
+    color: "#FFFFFF"

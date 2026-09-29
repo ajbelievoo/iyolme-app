@@ -1,0 +1,20 @@
+Ä£file:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_local_notifications-19.5.0/lib/src/platform_specifics/android/notification_channel_group.dartÅ‚/// A group of related Android notification channels.
+class AndroidNotificationChannelGroup {
+  /// Constructs an instance of [AndroidNotificationChannelGroup].
+  const AndroidNotificationChannelGroup(
+    this.id,
+    this.name, {
+    this.description,
+  });
+
+  /// The id of this group.
+  final String id;
+
+  /// The name of this group.
+  final String name;
+
+  /// The description of this group.
+  ///
+  /// Only applicable to Android 9.0 or newer.
+  final String? description;
+}

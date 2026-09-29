@@ -1,0 +1,568 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:livekit_client/livekit_client.dart';
+import 'package:shortzz/common/manager/logger.dart';
+import 'package:shortzz/model/livestream/livestream.dart';
+import 'package:shortzz/model/livestream/livestream_user_state.dart';
+import 'package:shortzz/screen/live_stream/livestream_screen/audience/widget/livestream_audience_top_view.dart';
+import 'package:shortzz/screen/live_stream/livestream_screen/livestream_screen_controller.dart';
+import 'package:shortzz/screen/live_stream/livestream_screen/view/battle_view.dart';
+import 'package:shortzz/screen/live_stream/livestream_screen/view/live_stream_bottom_view.dart';
+import 'package:shortzz/screen/live_stream/livestream_screen/view/livestream_view.dart';
+import 'package:shortzz/screen/live_stream/livestream_screen/widget/battle_start_countdown_overlay.dart';
+import 'package:shortzz/screen/live_stream/livestream_screen/widget/live_stream_background_blur_image.dart';
+import 'package:shortzz/screen/live_stream/livestream_screen/widget/live_music_floating_button.dart';
+import 'package:shortzz/utilities/theme_res.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
+
+class LiveKitAudienceScreen extends StatefulWidget {
+  final Livestream livestream;
+  final String url;
+  final String token;
+
+  const LiveKitAudienceScreen({
+    super.key,
+    required this.livestream,
+    required this.url,
+    required this.token,
+  });
+
+  @override
+  State<LiveKitAudienceScreen> createState() => _LiveKitAudienceScreenState();
+}
+
+class _CoverVideoTrack extends StatelessWidget {
+  final VideoTrack track;
+
+  const _CoverVideoTrack(this.track);
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox.expand(
+      child: VideoTrackRenderer(
+        track,
+        fit: VideoViewFit.cover,
+        autoCenter: false,
+      ),
+    );
+  }
+}
+
+class _LiveKitAudienceScreenState extends State<LiveKitAudienceScreen>
+    with WidgetsBindingObserver {
+  final Room _room = Room();
+  bool _connecting = true;
+  String? _error;
+  int _connectAttempt = 0;
+
+  late final LivestreamScreenController _controller;
+
+  Worker? _userStateWorker;
+  bool _cohostPublishing = false;
+
+  // Prevent subscription flapping (can cause audible glitches).
+  final Map<int, bool> _lastRemoteAudioSubDecision = <int, bool>{};
+
+  Timer? _speakingPollTimer;
+
+  Future<void> _syncRemoteAudioSubscriptions() async {
+    try {
+      final hostId = widget.livestream.hostId ?? 0;
+      for (final p in _room.remoteParticipants.values) {
+        final userId = int.tryParse(p.identity);
+        if (userId == null || userId <= 0) continue;
+
+        final st = _controller.liveUsersStates
+            .firstWhereOrNull((e) => e.userId == userId);
+        final status = st?.audioStatus;
+
+        // Default: subscribe unless we know the user is muted.
+        bool shouldSubscribe = true;
+
+        if (status != null) {
+          shouldSubscribe = status == VideoAudioStatus.on;
+        }
+
+        // In audio-room: only seated users should be audible.
+        if (_controller.isAudioRoom && !_controller.isUserSeated(userId)) {
+          shouldSubscribe = false;
+        }
+
+        // Host music injection should still be audible even if host mic is OFF.
+        // So never unsubscribe host audio track while music is enabled.
+        if (userId == hostId && _controller.isLiveMusicEnabled) {
+          shouldSubscribe = true;
+        }
+
+        final prev = _lastRemoteAudioSubDecision[userId];
+        if (prev == shouldSubscribe) {
+          continue;
+        }
+        _lastRemoteAudioSubDecision[userId] = shouldSubscribe;
+
+        for (final pub in p.audioTrackPublications) {
+          try {
+            if (shouldSubscribe) {
+              await pub.subscribe();
+            } else {
+              await pub.unsubscribe();
+            }
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<void> Function()? _unsubEvents;
+
+  String _friendlyConnectError(Object e) {
+    if (e is ConnectException) {
+      if (e.reason == ConnectionErrorReason.Timeout) {
+        return 'Network timeout. Please check your internet and try again.';
+      }
+      return 'Unable to connect. Please check your internet and try again.';
+    }
+    if (e is MediaConnectException) {
+      return 'Network issue while connecting media. Please try again.';
+    }
+    if (e is LiveKitException) {
+      return 'Unable to join live. Please try again.';
+    }
+    return 'Something went wrong. Please try again.';
+  }
+
+  bool _shouldAutoRetryConnect(Object e) {
+    if (_connectAttempt >= 2) return false;
+    if (e is ConnectException && e.reason == ConnectionErrorReason.Timeout) {
+      return true;
+    }
+    if (e is MediaConnectException) return true;
+    return false;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _controller = Get.put(
+      LivestreamScreenController(
+        widget.livestream.obs,
+        false,
+        bootstrapProvider: false,
+      ),
+    );
+
+    _controller.livekitSetMicrophoneEnabled = (enabled) async {
+      await _room.localParticipant?.setMicrophoneEnabled(enabled);
+    };
+    _controller.livekitSetCameraEnabled = (enabled) async {
+      await _room.localParticipant?.setCameraEnabled(enabled);
+      _syncLocalVideoToStreamViews();
+      _syncRemoteVideoToStreamViews();
+    };
+    _controller.livekitDisconnect = () async {
+      await _room.disconnect();
+      // Allow programmatic pop (PopScope blocks default back)
+      _controller.allowRoutePop.value = true;
+      if (mounted) Get.back();
+    };
+
+    _userStateWorker = ever<List<LivestreamUserState>>(
+      _controller.liveUsersStates,
+      (_) {
+        _syncCohostPublishFromUserState();
+        _syncRemoteAudioSubscriptions();
+      },
+    );
+    _connect();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      try {
+        // Keep user in live while minimized (audio should keep working).
+        // Audience is already mic-gated; only disable camera to reduce load.
+        _controller.livekitSetCameraEnabled?.call(false);
+      } catch (_) {}
+      return;
+    }
+
+    if (state == AppLifecycleState.resumed) {
+      Future.microtask(() async {
+        try {
+          await _controller.applyLocalAudioGate();
+        } catch (_) {}
+        try {
+          _syncLocalVideoToStreamViews();
+          _syncRemoteVideoToStreamViews();
+        } catch (_) {}
+        if (mounted) setState(() {});
+      });
+    }
+  }
+
+  Future<void> _syncCohostPublishFromUserState() async {
+    try {
+      final myId = _controller.myUserId;
+      final state = _controller.liveUsersStates
+          .firstWhereOrNull((e) => e.userId == myId);
+
+      // Audio/video publish must follow seat + mic/video status rules.
+      // For audio-room: publish mic only when seated + audioStatus ON.
+      // For video-room: mic follows audioStatus; camera follows videoStatus.
+      final isCoHost = state?.type == LivestreamUserType.coHost;
+      if (isCoHost != true) {
+        _cohostPublishing = false;
+        await _controller.livekitSetMicrophoneEnabled?.call(false);
+        await _controller.livekitSetCameraEnabled?.call(false);
+        return;
+      }
+
+      _cohostPublishing = true;
+      await _controller.applyLocalAudioGate();
+
+      final shouldVideoPublish = !_controller.isAudioRoom &&
+          state?.videoStatus == VideoAudioStatus.on;
+      await _controller.livekitSetCameraEnabled?.call(shouldVideoPublish);
+    } catch (e) {
+      Loggers.error('[LIVEKIT] cohost publish sync failed: $e');
+    }
+  }
+
+  void _startSpeakingPoll() {
+    _speakingPollTimer?.cancel();
+    _speakingPollTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      try {
+        final speaking = <dynamic>[];
+        for (final p in _room.remoteParticipants.values) {
+          try {
+            if ((p as dynamic).isSpeaking == true) {
+              speaking.add((p as dynamic).identity);
+            }
+          } catch (_) {}
+        }
+        _controller.setSpeakingUsersFromIdentities(speaking);
+      } catch (_) {}
+    });
+  }
+
+  void _syncLocalVideoToStreamViews() {
+    final lp = _room.localParticipant;
+    final pubs = lp?.videoTrackPublications ?? const [];
+    final videoPub = pubs.firstWhereOrNull((p) => p.track is LocalVideoTrack);
+    final VideoTrack? track = videoPub?.track as VideoTrack?;
+    if (track == null) return;
+
+    final myId = _controller.myUserId.toString();
+    final existingIndex =
+        _controller.streamViews.indexWhere((v) => v.streamId == myId);
+    final view = StreamView(
+      myId,
+      -1,
+      _CoverVideoTrack(track),
+      false,
+    );
+
+    if (existingIndex == -1) {
+      _controller.streamViews.add(view);
+    } else {
+      _controller.streamViews[existingIndex] = view;
+      _controller.streamViews.refresh();
+    }
+  }
+
+  Future<void> _connect() async {
+    try {
+      _connectAttempt++;
+      await WakelockPlus.enable();
+
+      // Avoid duplicate event listeners on retry/reconnect.
+      try {
+        _unsubEvents?.call();
+      } catch (_) {}
+      _unsubEvents = null;
+
+      _unsubEvents = _room.events.listen((event) {
+        if (event is RoomConnectedEvent) {
+          Loggers.info('[LIVEKIT] audience connected');
+          _startSpeakingPoll();
+          // Audience should never publish mic/cam unless they become co-host.
+          Future.microtask(() async {
+            try {
+              await _controller.livekitSetMicrophoneEnabled?.call(false);
+            } catch (_) {}
+            try {
+              await _controller.livekitSetCameraEnabled?.call(false);
+            } catch (_) {}
+            try {
+              await _controller.applyLocalAudioGate();
+            } catch (_) {}
+          });
+        }
+        if (event is RoomDisconnectedEvent) {
+          Loggers.info('[LIVEKIT] audience disconnected reason=${event.reason}');
+          _controller.setSpeakingUsersFromIdentities(const []);
+        }
+        if (event is TrackSubscribedEvent) {
+          Loggers.info(
+              '[LIVEKIT] track subscribed kind=${event.publication.kind} sid=${event.publication.sid}');
+          if (mounted) {
+            _syncRemoteVideoToStreamViews();
+            _syncRemoteAudioSubscriptions();
+            setState(() {});
+          }
+        }
+      });
+
+      const opts = RoomOptions(
+        adaptiveStream: true,
+        dynacast: true,
+      );
+
+      await _room.connect(
+        widget.url,
+        widget.token,
+        roomOptions: opts,
+      );
+
+      // Ensure audience never publishes mic even before user_state snapshots arrive.
+      try {
+        await _controller.applyLocalAudioGate();
+      } catch (_) {}
+
+      _syncRemoteVideoToStreamViews();
+
+      if (!mounted) return;
+      setState(() {
+        _connecting = false;
+        _error = null;
+        _connectAttempt = 0;
+      });
+    } catch (e, stackTrace) {
+      Loggers.error('[LIVEKIT] audience connect failed: $e');
+      Loggers.error('[LIVEKIT] audience connect stack: $stackTrace');
+      if (!mounted) return;
+
+      if (_shouldAutoRetryConnect(e)) {
+        Loggers.info(
+            '[LIVEKIT] audience connect auto-retry attempt=$_connectAttempt');
+        try {
+          await _room.disconnect();
+        } catch (_) {}
+        await Future.delayed(const Duration(seconds: 2));
+        if (!mounted) return;
+        setState(() {
+          _connecting = true;
+          _error = null;
+        });
+        await _connect();
+        return;
+      }
+
+      setState(() {
+        _connecting = false;
+        _error = _friendlyConnectError(e);
+      });
+      _controller.showSnackBar('LiveKit connect failed');
+    }
+  }
+
+  @override
+  void dispose() {
+    try {
+      WidgetsBinding.instance.removeObserver(this);
+    } catch (_) {}
+    _speakingPollTimer?.cancel();
+    _unsubEvents?.call();
+    _userStateWorker?.dispose();
+    _room.dispose();
+    WakelockPlus.disable();
+    if (Get.isRegistered<LivestreamScreenController>()) {
+      Get.delete<LivestreamScreenController>();
+    }
+    super.dispose();
+  }
+
+  void _syncRemoteVideoToStreamViews() {
+    final remoteVideo = _firstRemoteVideoTrack();
+    if (remoteVideo == null) return;
+
+    final hostId = (widget.livestream.hostId ?? 0).toString();
+    final existingIndex =
+        _controller.streamViews.indexWhere((v) => v.streamId == hostId);
+    final view = StreamView(
+      hostId,
+      -1,
+      _CoverVideoTrack(remoteVideo),
+      false,
+    );
+
+    if (existingIndex == -1) {
+      _controller.streamViews.add(view);
+    } else {
+      _controller.streamViews[existingIndex] = view;
+      _controller.streamViews.refresh();
+    }
+  }
+
+  VideoTrack? _firstRemoteVideoTrack() {
+    for (final p in _room.remoteParticipants.values) {
+      for (final pub in p.videoTrackPublications) {
+        final t = pub.track;
+        if (t is VideoTrack) return t;
+      }
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: blackPure(context),
+      resizeToAvoidBottomInset: false,
+      body: Obx(
+        () => PopScope(
+          canPop: _controller.allowRoutePop.value,
+          onPopInvoked: (didPop) {
+            if (didPop) return;
+            if (_controller.allowRoutePop.value) return;
+            if (Get.isBottomSheetOpen == true || Get.isDialogOpen == true) return;
+            // Role-based behavior:
+            // - coHost: show Exit/Cancel sheet
+            // - normal audience: leave immediately (no popup)
+            try {
+              final myId = _controller.myUserId;
+              final myState = _controller.liveUsersStates
+                  .firstWhereOrNull((e) => e.userId == myId);
+              final isCoHost = myState?.type == LivestreamUserType.coHost;
+              if (isCoHost) {
+                _controller.onExitButtonTap();
+              } else {
+                _controller.exitLiveOnly();
+              }
+            } catch (_) {
+              _controller.exitLiveOnly();
+            }
+          },
+          child: _connecting
+              ? const Center(child: CircularProgressIndicator())
+              : _error != null
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              _error ?? 'Unable to join live.',
+                              style: const TextStyle(color: Colors.white),
+                              textAlign: TextAlign.center,
+                            ),
+                            const SizedBox(height: 16),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                ElevatedButton(
+                                  onPressed: () async {
+                                    try {
+                                      await _room.disconnect();
+                                    } catch (_) {}
+                                    if (!mounted) return;
+                                    setState(() {
+                                      _connecting = true;
+                                      _error = null;
+                                      _connectAttempt = 0;
+                                    });
+                                    await _connect();
+                                  },
+                                  child: const Text('Retry'),
+                                ),
+                                const SizedBox(width: 12),
+                                OutlinedButton(
+                                  onPressed: () async {
+                                    try {
+                                      await _room.disconnect();
+                                    } catch (_) {}
+                                    _controller.allowRoutePop.value = true;
+                                    if (mounted) Get.back();
+                                  },
+                                  child: const Text('OK'),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                  : Stack(
+                      children: [
+                        const LiveStreamBlurBackgroundImage(),
+                        Positioned.fill(
+                          child: Obx(
+                            () {
+                              switch (_controller.liveData.value.type) {
+                                case null:
+                                case LivestreamType.livestream:
+                                  return SizedBox.expand(
+                                    child: LivestreamView(
+                                      streamViews: _controller.streamViews,
+                                      controller: _controller,
+                                    ),
+                                  );
+                                case LivestreamType.battle:
+                                  return SizedBox.expand(
+                                    child: BattleView(
+                                      isAudience: true,
+                                      controller: _controller,
+                                      margin: const EdgeInsets.only(top: 100),
+                                    ),
+                                  );
+                                case LivestreamType.dummy:
+                                  return const SizedBox();
+                              }
+                            },
+                          ),
+                        ),
+                        _buildTopAndBottom(context),
+                        Positioned(
+                          top: 70,
+                          right: 12,
+                          child: LiveMusicFloatingButton(controller: _controller),
+                        ),
+                        Obx(
+                          () {
+                            Livestream stream = _controller.liveData.value;
+                            bool isBattle =
+                                stream.battleType == BattleType.waiting;
+                            if (isBattle) {
+                              return BattleStartCountdownOverlay(
+                                  isHost: false, stream: stream);
+                            }
+                            return const SizedBox();
+                          },
+                        )
+                      ],
+                    ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTopAndBottom(BuildContext context) {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        LiveStreamAudienceTopView(
+            isAudience: true, controller: _controller),
+        LiveStreamBottomView(
+            isAudience: true, controller: _controller),
+      ],
+    );
+  }
+}

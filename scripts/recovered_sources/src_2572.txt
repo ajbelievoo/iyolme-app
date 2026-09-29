@@ -1,0 +1,17 @@
+{file:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/petitparser-7.0.2/lib/src/parser/character/predicate/not.dart´import '../predicate.dart';
+
+class NotCharPredicate extends CharacterPredicate {
+  const NotCharPredicate(this.predicate);
+
+  final CharacterPredicate predicate;
+
+  @override
+  bool test(int charCode) => !predicate.test(charCode);
+
+  @override
+  bool isEqualTo(CharacterPredicate other) =>
+      other is NotCharPredicate && predicate.isEqualTo(other.predicate);
+
+  @override
+  String toString() => '${super.toString()}($predicate)';
+}

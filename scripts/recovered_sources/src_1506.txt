@@ -1,0 +1,24 @@
+€Œfile:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/geolocator_platform_interface-4.2.6/lib/src/extensions/integer_extensions.dart‚Øimport '../enums/enums.dart';
+import '../errors/errors.dart';
+
+/// Provides extension methods on the LocationAccuracy enum.
+extension IntergerExtensions on int {
+  /// Tries to convert the int value to a LocationPermission enum value.
+  ///
+  /// Throws an InvalidPermissionException if the int value cannot be
+  /// converted to a LocationPermission.
+  LocationPermission toLocationPermission() {
+    switch (this) {
+      case 0:
+        return LocationPermission.denied;
+      case 1:
+        return LocationPermission.deniedForever;
+      case 2:
+        return LocationPermission.whileInUse;
+      case 3:
+        return LocationPermission.always;
+      default:
+        throw InvalidPermissionException(this);
+    }
+  }
+}

@@ -1,0 +1,13 @@
+tfile:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/pointycastle-4.0.0/lib/src/api/parameters_with_iv.dartÅΩ// See file LICENSE for more information.
+
+part of '../../api.dart';
+
+/// [CipherParameters] consisting of an underlying [CipherParameters] (of type [UnderlyingParameters]) and an initialization
+/// vector of arbitrary length.
+class ParametersWithIV<UnderlyingParameters extends CipherParameters?>
+    implements CipherParameters {
+  final Uint8List iv;
+  final UnderlyingParameters? parameters;
+
+  ParametersWithIV(this.parameters, this.iv);
+}

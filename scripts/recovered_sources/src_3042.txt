@@ -1,0 +1,64 @@
+cþDfile:///E:/flutterapp_pro/lib/common/controller/base_controller.dart†Vï»¿import 'package:fluttertoast/fluttertoast.dart';
+import 'package:get/get.dart';
+import 'package:shortzz/common/widget/loader_widget.dart';
+import 'package:shortzz/common/manager/logger.dart';
+
+class BaseController extends FullLifeCycleController {
+  RxBool isLoading = false.obs;
+  static final share = BaseController();
+
+  void showLoader({bool barrierDismissible = true}) async {
+    if (isLoading.value) return;
+    isLoading.value = true;
+    try {
+      Get.dialog(
+        const LoaderWidget(),
+        barrierDismissible: barrierDismissible,
+      );
+    } catch (e, st) {
+      Loggers.error('Error showing loader: $e\n$st');
+      isLoading.value = false;
+    }
+  }
+
+  void stopLoader() {
+    if (!isLoading.value) return;
+    try {
+      if (Get.isDialogOpen == true) {
+        final canPop = Get.key.currentState?.canPop() ?? false;
+        if (canPop) {
+          Get.key.currentState?.pop();
+        }
+      }
+    } catch (e) {
+      Loggers.info('Error stopping loader: $e');
+    } finally {
+      isLoading.value = false;
+    }
+  }
+
+  void showSnackBar(String? title, {int second = 2}) {
+    try {
+      final msg = title?.capitalizeFirst?.tr ?? '';
+      if (msg.isEmpty) return;
+
+      Fluttertoast.showToast(
+        msg: msg,
+        toastLength: second > 2 ? Toast.LENGTH_LONG : Toast.LENGTH_SHORT,
+      );
+    } catch (e, st) {
+      Loggers.error('Error showing snackbar: $e\n$st');
+    }
+  }
+
+  void stopSnackBar() {
+    if (Get.isSnackbarOpen) {
+      try {
+        Get.closeAllSnackbars();
+      } catch (e, st) {
+        Loggers.error('Error closing snackbars: $e\n$st');
+      }
+    }
+  }
+}
+A

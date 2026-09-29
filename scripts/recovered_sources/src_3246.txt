@@ -1,0 +1,1007 @@
+‰¸import 'package:flutter/material.dart';
+import 'package:shortzz/common/controller/base_controller.dart';
+import 'package:shortzz/common/manager/session_manager.dart';
+import 'package:shortzz/model/user_model/user_model.dart';
+import 'package:shortzz/screen/ads_manager/data/ads_repository.dart';
+import 'package:shortzz/screen/ads_manager/mock/ads_manager_mock_data.dart';
+import 'package:shortzz/screen/ads_manager/screen/campaign_analytics/campaign_analytics_screen.dart';
+import 'package:shortzz/screen/ads_manager/widget/ads_empty_state.dart';
+import 'package:shortzz/screen/ads_manager/widget/ads_section_header.dart';
+import 'package:shortzz/screen/ads_manager/widget/ads_skeleton_card.dart';
+import 'package:shortzz/utilities/theme_res.dart';
+
+class AdsCampaignsTab extends StatefulWidget {
+  const AdsCampaignsTab({super.key});
+
+  @override
+  State<AdsCampaignsTab> createState() => _AdsCampaignsTabState();
+}
+
+class _AdsCampaignsTabState extends State<AdsCampaignsTab>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  final AdsManagerRepository _repo = AdsManagerRepository();
+  List<AdsManagerCampaignItem>? _items;
+  bool _loading = true;
+  String? _error;
+  final Set<int> _busyCampaignIds = <int>{};
+
+  final ScrollController _scrollController = ScrollController();
+  bool _loadingMore = false;
+  bool _hasMore = true;
+
+  String _statusFilter = 'all';
+  String _placementFilter = 'all';
+  String _query = '';
+
+  List<AdsManagerCampaignItem> _applyFilters(List<AdsManagerCampaignItem> items) {
+    final q = _query.trim().toLowerCase();
+    final statusF = _statusFilter.trim().toLowerCase();
+    final placementF = _placementFilter.trim().toLowerCase();
+
+    return items.where((c) {
+      if (q.isNotEmpty && !c.title.toLowerCase().contains(q)) {
+        return false;
+      }
+      if (statusF != 'all') {
+        final s = c.status.toLowerCase();
+        if (statusF == 'active') {
+          if (!(s == 'active' || s == 'running')) return false;
+        } else if (s != statusF) {
+          return false;
+        }
+      }
+      if (placementF != 'all') {
+        final p = c.placement.toLowerCase();
+        if (p != placementF) return false;
+      }
+      return true;
+    }).toList();
+  }
+
+  Future<void> _openFilterSheet() async {
+    String nextStatus = _statusFilter;
+    String nextPlacement = _placementFilter;
+    String nextQuery = _query;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: scaffoldBackgroundColor(context),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        final queryController = TextEditingController(text: nextQuery);
+        return SafeArea(
+          child: Padding(
+            padding: EdgeInsets.only(
+              left: 16,
+              right: 16,
+              top: 12,
+              bottom: MediaQuery.of(ctx).viewInsets.bottom + 16,
+            ),
+            child: StatefulBuilder(
+              builder: (context, setModalState) {
+                Widget chip(String label, bool selected, VoidCallback onTap) {
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 8, bottom: 8),
+                    child: ChoiceChip(
+                      label: Text(label),
+                      selected: selected,
+                      onSelected: (_) => onTap(),
+                    ),
+                  );
+                }
+
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Filter',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w900,
+                              color: textDarkGrey(context),
+                              fontSize: 16,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: () => Navigator.of(ctx).maybePop(),
+                          icon: Icon(Icons.close, color: textDarkGrey(context)),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    TextFormField(
+                      controller: queryController,
+                      decoration: const InputDecoration(
+                        labelText: 'Search by title',
+                        border: OutlineInputBorder(),
+                      ),
+                      onChanged: (v) {
+                        setModalState(() {
+                          nextQuery = v;
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      'Status',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        color: textDarkGrey(context),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      children: [
+                        chip('All', nextStatus == 'all', () {
+                          setModalState(() => nextStatus = 'all');
+                        }),
+                        chip('Active', nextStatus == 'active', () {
+                          setModalState(() => nextStatus = 'active');
+                        }),
+                        chip('Paused', nextStatus == 'paused', () {
+                          setModalState(() => nextStatus = 'paused');
+                        }),
+                        chip('Pending', nextStatus == 'pending', () {
+                          setModalState(() => nextStatus = 'pending');
+                        }),
+                        chip('Completed', nextStatus == 'completed', () {
+                          setModalState(() => nextStatus = 'completed');
+                        }),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Placement',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        color: textDarkGrey(context),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      children: [
+                        chip('All', nextPlacement == 'all', () {
+                          setModalState(() => nextPlacement = 'all');
+                        }),
+                        chip('Feed', nextPlacement == 'feed', () {
+                          setModalState(() => nextPlacement = 'feed');
+                        }),
+                        chip('Story', nextPlacement == 'story', () {
+                          setModalState(() => nextPlacement = 'story');
+                        }),
+                        chip('Reel', nextPlacement == 'reel', () {
+                          setModalState(() => nextPlacement = 'reel');
+                        }),
+                        chip('Profile', nextPlacement == 'profile', () {
+                          setModalState(() => nextPlacement = 'profile');
+                        }),
+                        chip('Explore', nextPlacement == 'explore', () {
+                          setModalState(() => nextPlacement = 'explore');
+                        }),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () {
+                              setModalState(() {
+                                nextStatus = 'all';
+                                nextPlacement = 'all';
+                                nextQuery = '';
+                                queryController.text = '';
+                              });
+                            },
+                            child: const Text('Reset'),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: () {
+                              setState(() {
+                                _statusFilter = nextStatus;
+                                _placementFilter = nextPlacement;
+                                _query = nextQuery;
+                              });
+                              Navigator.of(ctx).maybePop();
+                            },
+                            child: const Text(
+                              'Apply',
+                              style: TextStyle(fontWeight: FontWeight.w900),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _openEditBudgetSheet(AdsManagerCampaignItem c) async {
+    final items = _items;
+    if (items == null) return;
+
+    final status = c.status.toLowerCase();
+    final canEdit = status == 'active' || status == 'paused' || status == 'running';
+    if (!canEdit) {
+      BaseController.share.showSnackBar(
+        'Budget can be edited only for active/paused campaigns',
+      );
+      return;
+    }
+
+    final idx = items.indexWhere((x) => x.id == c.id);
+    if (idx < 0) return;
+
+    final controller = TextEditingController(text: c.budget.toString());
+    bool saving = false;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: scaffoldBackgroundColor(context),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        final nav = Navigator.of(ctx);
+        return SafeArea(
+          child: Padding(
+            padding: EdgeInsets.only(
+              left: 16,
+              right: 16,
+              top: 12,
+              bottom: MediaQuery.of(ctx).viewInsets.bottom + 16,
+            ),
+            child: StatefulBuilder(
+              builder: (context, setModalState) {
+                Future<void> submit() async {
+                  if (saving) return;
+                  final nextBudget = num.tryParse(controller.text.trim()) ?? 0;
+                  if (nextBudget <= 0) {
+                    BaseController.share.showSnackBar(
+                      'Please enter a valid budget',
+                    );
+                    return;
+                  }
+
+                  if (c.spend > 0 && nextBudget < c.spend) {
+                    BaseController.share.showSnackBar(
+                      'Budget must be greater than or equal to spent amount',
+                    );
+                    return;
+                  }
+
+                  if (c.dailyBudget > 0 && nextBudget < c.dailyBudget) {
+                    BaseController.share.showSnackBar(
+                      'Total budget must be greater than or equal to daily budget',
+                    );
+                    return;
+                  }
+
+                  setModalState(() {
+                    saving = true;
+                  });
+
+                  try {
+                    await _repo.editBudget(
+                      campaignId: c.id,
+                      newBudget: nextBudget,
+                    );
+                    if (!mounted) return;
+                    setState(() {
+                      items[idx] = AdsManagerCampaignItem(
+                        id: c.id,
+                        title: c.title,
+                        mediaUrl: c.mediaUrl,
+                        status: c.status,
+                        placement: c.placement,
+                        spend: c.spend,
+                        budget: nextBudget,
+                        dailyBudget: c.dailyBudget,
+                        impressions: c.impressions,
+                        clicks: c.clicks,
+                        createdAt: c.createdAt,
+                      );
+                    });
+                    nav.maybePop();
+                    BaseController.share.showSnackBar('Budget updated');
+                  } catch (e) {
+                    BaseController.share.showSnackBar(e.toString());
+                    setModalState(() {
+                      saving = false;
+                    });
+                  }
+                }
+
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Edit budget',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w900,
+                              color: textDarkGrey(context),
+                              fontSize: 16,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: saving
+                              ? null
+                              : () => Navigator.of(ctx).maybePop(),
+                          icon: Icon(
+                            Icons.close,
+                            color: textDarkGrey(context),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      c.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: textLightGrey(context),
+                        fontSize: 12,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.04),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: textLightGrey(context).withValues(alpha: 0.14),
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Current budget: ${c.budget}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                              color: textDarkGrey(context),
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Spent: ${c.spend}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: textLightGrey(context),
+                            ),
+                          ),
+                          if (c.dailyBudget > 0) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              'Daily budget: ${c.dailyBudget}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: textLightGrey(context),
+                              ),
+                            ),
+                          ],
+                          const SizedBox(height: 6),
+                          Text(
+                            'Note: New budget must be >= spent and >= daily budget.',
+                            style: TextStyle(
+                              fontSize: 11,
+                              height: 1.35,
+                              color: textLightGrey(context),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: controller,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(
+                        labelText: 'New total budget',
+                        border: OutlineInputBorder(),
+                      ),
+                      onFieldSubmitted: (_) => submit(),
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      height: 52,
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: saving ? null : submit,
+                        style: ElevatedButton.styleFrom(
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
+                        child: saving
+                            ? SizedBox(
+                                height: 18,
+                                width: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: textLightGrey(context),
+                                ),
+                              )
+                            : const Text(
+                                'Save',
+                                style: TextStyle(fontWeight: FontWeight.w900),
+                              ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
+
+    controller.dispose();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_onScroll);
+    _fetch();
+  }
+
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    if (_loading || _loadingMore || !_hasMore) return;
+    final pos = _scrollController.position;
+    if (!pos.hasPixels || !pos.hasContentDimensions) return;
+
+    if (pos.pixels >= pos.maxScrollExtent - 260) {
+      _fetchMore();
+    }
+  }
+
+  Future<void> _fetch() async {
+    if (!mounted) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+      _hasMore = true;
+    });
+
+    try {
+      final ads = await _repo.listCampaigns();
+      final items = <AdsManagerCampaignItem>[];
+      items.addAll(ads);
+      try {
+        final boosts = await _repo.listBoostCampaigns();
+        items.addAll(boosts);
+      } catch (_) {
+        // ignore boost errors, show ads list
+      }
+      items.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      if (!mounted) return;
+      setState(() {
+        _items = items;
+        _loading = false;
+        _hasMore = ads.isNotEmpty;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _items = null;
+        _loading = false;
+        _error = e.toString();
+        _hasMore = false;
+      });
+    }
+  }
+
+  Future<void> _fetchMore() async {
+    final items = _items;
+    if (items == null || items.isEmpty) return;
+    if (_loadingMore || !_hasMore) return;
+
+    final lastId = items.last.id;
+    if (lastId <= 0) return;
+
+    setState(() {
+      _loadingMore = true;
+    });
+
+    try {
+      final next = await _repo.listCampaigns(lastItemId: lastId);
+      if (!mounted) return;
+
+      if (next.isEmpty) {
+        setState(() {
+          _loadingMore = false;
+          _hasMore = false;
+        });
+        return;
+      }
+
+      final existingIds = items.map((e) => e.id).toSet();
+      final deduped = next.where((e) => !existingIds.contains(e.id)).toList();
+
+      setState(() {
+        items.addAll(deduped);
+        _loadingMore = false;
+        _hasMore = deduped.isNotEmpty;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loadingMore = false;
+        _hasMore = false;
+      });
+      BaseController.share.showSnackBar(e.toString());
+    }
+  }
+
+  Future<void> _toggleCampaign(AdsManagerCampaignItem c, bool nextActive) async {
+    final User? user = SessionManager.instance.getUser();
+    // final canEdit = user?.hasPermission('campaigns_edit') == true;
+    const canEdit = true;
+    if (!canEdit) {
+      BaseController.share
+          .showSnackBar('Forbidden: campaigns_edit permission required');
+      return;
+    }
+
+    if (_busyCampaignIds.contains(c.id)) return;
+    final status = c.status.toLowerCase();
+    final prevActive = status == 'active' || status == 'running';
+    if (prevActive == nextActive) return;
+
+    final items = _items;
+    if (items == null) return;
+
+    final idx = items.indexWhere((x) => x.id == c.id);
+    if (idx < 0) return;
+
+    setState(() {
+      _busyCampaignIds.add(c.id);
+      items[idx] = AdsManagerCampaignItem(
+        id: c.id,
+        title: c.title,
+        mediaUrl: c.mediaUrl,
+        status: nextActive ? 'Active' : 'Paused',
+        placement: c.placement,
+        spend: c.spend,
+        budget: c.budget,
+        dailyBudget: c.dailyBudget,
+        impressions: c.impressions,
+        clicks: c.clicks,
+        createdAt: c.createdAt,
+      );
+    });
+
+    try {
+      if (nextActive) {
+        await _repo.resumeCampaign(campaignId: c.id);
+      } else {
+        await _repo.pauseCampaign(campaignId: c.id);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        items[idx] = c;
+      });
+      BaseController.share.showSnackBar(e.toString());
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busyCampaignIds.remove(c.id);
+        });
+      }
+    }
+  }
+
+  Future<void> _deleteCampaign(AdsManagerCampaignItem c) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Campaign'),
+        content: Text('Are you sure you want to delete "${c.title}"?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    final items = _items;
+    if (items == null) return;
+    
+    // Optimistic remove
+    setState(() {
+      items.removeWhere((x) => x.id == c.id);
+    });
+
+    try {
+      await _repo.deleteCampaign(campaignId: c.id);
+      BaseController.share.showSnackBar('Campaign deleted');
+    } catch (e) {
+      // Revert
+      setState(() {
+        items.add(c);
+        // Sort or insert at correct position if needed, but append is safe for now
+      });
+      BaseController.share.showSnackBar(e.toString());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+
+    final User? user = SessionManager.instance.getUser();
+    const canView = true;
+    const canEdit = true;
+    const canAnalytics = true;
+
+    if (!canView) {
+      return ListView(
+        padding: const EdgeInsets.all(16),
+        children: const [
+          AdsSectionHeader(title: 'My Campaigns'),
+          SizedBox(height: 10),
+          AdsEmptyState(
+            title: 'Campaigns locked',
+            subtitle: 'You do not have permission to view campaigns.',
+            icon: Icons.lock_outline,
+          ),
+        ],
+      );
+    }
+
+    final items = _items;
+    final filtered = items == null ? null : _applyFilters(items);
+
+    Widget body;
+    if (_loading) {
+      body = ListView(
+        padding: const EdgeInsets.all(16),
+        children: const [
+          AdsSectionHeader(title: 'My Campaigns'),
+          SizedBox(height: 10),
+          AdsSkeletonCard(height: 110),
+          SizedBox(height: 10),
+          AdsSkeletonCard(height: 110),
+          SizedBox(height: 10),
+          AdsSkeletonCard(height: 110),
+        ],
+      );
+    } else if ((_error ?? '').trim().isNotEmpty) {
+      body = ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          AdsSectionHeader(
+            title: 'My Campaigns',
+            action: TextButton.icon(
+              onPressed: _fetch,
+              icon: const Icon(Icons.refresh, size: 18),
+              label: const Text('Retry'),
+            ),
+          ),
+          const SizedBox(height: 10),
+          AdsEmptyState(
+            title: 'Could not load campaigns',
+            subtitle: _error,
+            icon: Icons.wifi_off,
+            action: ElevatedButton(
+              onPressed: _fetch,
+              child: const Text('Try again'),
+            ),
+          ),
+        ],
+      );
+    } else if (items == null || items.isEmpty) {
+      body = ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          const AdsSectionHeader(title: 'My Campaigns'),
+          const SizedBox(height: 10),
+          AdsEmptyState(
+            title: 'No campaigns yet',
+            subtitle: 'Create your first campaign to start getting reach.',
+            icon: Icons.campaign_outlined,
+            action: OutlinedButton.icon(
+              onPressed: _fetch,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Refresh'),
+            ),
+          ),
+        ],
+      );
+    } else if (filtered == null || filtered.isEmpty) {
+      body = ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          AdsSectionHeader(
+            title: 'My Campaigns',
+            action: TextButton.icon(
+              onPressed: _openFilterSheet,
+              icon: const Icon(Icons.tune, size: 18),
+              label: const Text('Filter'),
+            ),
+          ),
+          const SizedBox(height: 10),
+          AdsEmptyState(
+            title: 'No matching campaigns',
+            subtitle: 'Try changing filters or clearing search.',
+            icon: Icons.filter_alt_off_outlined,
+            action: OutlinedButton(
+              onPressed: () {
+                setState(() {
+                  _statusFilter = 'all';
+                  _placementFilter = 'all';
+                  _query = '';
+                });
+              },
+              child: const Text('Clear filters'),
+            ),
+          ),
+        ],
+      );
+    } else {
+      body = ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          AdsSectionHeader(
+            title: 'My Campaigns',
+            action: TextButton.icon(
+              onPressed: _openFilterSheet,
+              icon: const Icon(Icons.tune, size: 18),
+              label: const Text('Filter'),
+            ),
+          ),
+          const SizedBox(height: 10),
+        ],
+      );
+
+      final visibleItems = filtered;
+      body = ListView.builder(
+        padding: const EdgeInsets.all(16),
+        itemCount: 2 + visibleItems.length + 1,
+        itemBuilder: (context, index) {
+          if (index == 0) {
+            return AdsSectionHeader(
+              title: 'My Campaigns',
+              action: TextButton.icon(
+                onPressed: _openFilterSheet,
+                icon: const Icon(Icons.tune, size: 18),
+                label: const Text('Filter'),
+              ),
+            );
+          }
+          if (index == 1) {
+            return const SizedBox(height: 10);
+          }
+
+          final itemIndex = index - 2;
+          if (itemIndex >= visibleItems.length) {
+            return Padding(
+              padding: const EdgeInsets.only(top: 6, bottom: 12),
+              child: Center(
+                child: Text(
+                  'End of list',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: textLightGrey(context),
+                  ),
+                ),
+              ),
+            );
+          }
+
+          final c = visibleItems[itemIndex];
+          final status = c.status.toLowerCase();
+          final isActive = status == 'running' || status == 'active';
+          final canToggle = status == 'active' || status == 'paused';
+          final progress = c.budget > 0 ? (c.spend / c.budget) : 0;
+          final busy = _busyCampaignIds.contains(c.id);
+
+          return Container(
+            margin: const EdgeInsets.only(bottom: 10),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Theme.of(context).cardColor,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: textLightGrey(context).withValues(alpha: 0.16),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Container(
+                        height: 46,
+                        width: 46,
+                        color: Colors.black.withValues(alpha: 0.06),
+                        child: (c.mediaUrl ?? '').trim().isEmpty
+                            ? Icon(
+                                Icons.image_outlined,
+                                color: textLightGrey(context),
+                                size: 22,
+                              )
+                            : Image.network(
+                                c.mediaUrl ?? '',
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, __, ___) {
+                                  return Icon(
+                                    Icons.broken_image_outlined,
+                                    color: textLightGrey(context),
+                                    size: 22,
+                                  );
+                                },
+                              ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        c.title,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w900,
+                          color: textDarkGrey(context),
+                        ),
+                      ),
+                    ),
+                    Switch(
+                      value: isActive,
+                      onChanged: (!canToggle || busy || !canEdit)
+                          ? null
+                          : (v) {
+                              _toggleCampaign(c, v);
+                            },
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '${c.placement}  â€¢  Status: ${c.status}',
+                  style: TextStyle(
+                    color: textLightGrey(context),
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(999),
+                  child: LinearProgressIndicator(
+                    value: progress.clamp(0, 1).toDouble(),
+                    minHeight: 8,
+                    backgroundColor: Colors.black.withValues(alpha: 0.05),
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      themeAccentSolid(context),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Spent: ${c.spend} / ${c.budget}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: textLightGrey(context),
+                        ),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: (status == 'active' || status == 'paused')
+                          ? (canEdit ? () => _openEditBudgetSheet(c) : () {
+                              BaseController.share.showSnackBar(
+                                'Forbidden: campaigns_edit permission required',
+                              );
+                            })
+                          : null,
+                      child: const Text('Edit Budget'),
+                    ),
+                    TextButton(
+                      onPressed: canAnalytics
+                          ? () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => CampaignAnalyticsScreen(
+                                    campaign: c,
+                                  ),
+                                ),
+                              );
+                            }
+                          : () {
+                              BaseController.share.showSnackBar(
+                                'Forbidden: analytics_access permission required',
+                              );
+                            },
+                      child: const Text('Analytics'),
+                    ),
+                    if (canEdit)
+                      PopupMenuButton<String>(
+                        icon: Icon(Icons.more_vert, color: textLightGrey(context)),
+                        onSelected: (v) {
+                          if (v == 'delete') {
+                            _deleteCampaign(c);
+                          } else if (v == 'toggle') {
+                            _toggleCampaign(c, !isActive);
+                          }
+                        },
+                        itemBuilder: (ctx) => [
+                          PopupMenuItem(
+                            value: 'toggle',
+                            child: Text(isActive ? 'Pause' : 'Activate'),
+                          ),
+                          const PopupMenuItem(
+                            value: 'delete',
+                            child: Text('Delete', style: TextStyle(color: Colors.red)),
+                          ),
+                        ],
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          );
+        },
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: _fetch,
+      child: PrimaryScrollController(
+        controller: _scrollController,
+        child: body,
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
+    super.dispose();
+  }
+}
+ƒð

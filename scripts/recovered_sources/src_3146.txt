@@ -1,0 +1,152 @@
+rTIfile:///E:/flutterapp_pro/lib/common/widget/full_name_with_blue_tick.dart‘Ëimport 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:shortzz/common/service/api/user_service.dart';
+import 'package:shortzz/utilities/asset_res.dart';
+import 'package:shortzz/utilities/text_style_custom.dart';
+import 'package:shortzz/utilities/theme_res.dart';
+
+class FullNameWithBlueTick extends StatefulWidget {
+  final Widget? child;
+  final double? iconSize;
+  final double? fontSize;
+  final Color? fontColor;
+  final String? icon;
+  final String? username;
+  final int? userId;
+  final MainAxisAlignment? mainAxisAlignment;
+  final CrossAxisAlignment? crossAxisAlignment;
+  final TextStyle? style;
+  final dynamic isVerify;
+  final VoidCallback? onTap;
+  final double opacity;
+
+  const FullNameWithBlueTick(
+      {super.key,
+      required this.username,
+      this.userId,
+      this.child,
+      this.iconSize,
+      this.fontSize,
+      this.fontColor,
+      this.mainAxisAlignment,
+      this.crossAxisAlignment,
+      this.icon,
+      this.style,
+      this.isVerify = 0,
+      this.onTap,
+      this.opacity = 1});
+
+  @override
+  State<FullNameWithBlueTick> createState() => _FullNameWithBlueTickState();
+}
+
+class _FullNameWithBlueTickState extends State<FullNameWithBlueTick> {
+  static final RxMap<int, int> _verifiedCache = <int, int>{}.obs;
+  static final Map<int, DateTime> _lastResolveAttemptAt = <int, DateTime>{};
+  static const Duration _resolveThrottle = Duration(seconds: 20);
+  final RxInt _resolvedVerify = 0.obs;
+  final RxBool _isResolving = false.obs;
+
+  bool _isVerified(dynamic v) {
+    if (v == null) return false;
+    if (v is bool) return v;
+    if (v is num) return v.toInt() == 1;
+    if (v is String) {
+      final s = v.trim().toLowerCase();
+      if (s == 'true' || s == 'yes') return true;
+      final n = int.tryParse(s);
+      return n == 1;
+    }
+    return false;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _resolvedVerify.value = _isVerified(widget.isVerify) ? 1 : 0;
+    _resolveIfNeeded();
+  }
+
+  @override
+  void didUpdateWidget(covariant FullNameWithBlueTick oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.userId != widget.userId || oldWidget.isVerify != widget.isVerify) {
+      _resolvedVerify.value = _isVerified(widget.isVerify) ? 1 : 0;
+      _resolveIfNeeded();
+    }
+  }
+
+  Future<void> _resolveIfNeeded() async {
+    final uid = widget.userId;
+    if (uid == null || uid <= 0) return;
+
+    final last = _lastResolveAttemptAt[uid];
+    if (last != null && DateTime.now().difference(last) < _resolveThrottle) {
+      return;
+    }
+
+    if (_resolvedVerify.value == 1) {
+      _verifiedCache[uid] = 1;
+      return;
+    }
+    final cached = _verifiedCache[uid];
+    if (cached != null) {
+      _resolvedVerify.value = cached;
+      return;
+    }
+    if (_isResolving.value) return;
+    _isResolving.value = true;
+    _lastResolveAttemptAt[uid] = DateTime.now();
+    try {
+      final user = await UserService.instance.fetchUserDetails(userId: uid);
+      final v = (user?.isVerify ?? 0).toInt();
+      _verifiedCache[uid] = v;
+      _resolvedVerify.value = v;
+    } catch (_) {
+      // Don't cache failures as 0; allow retry later.
+    } finally {
+      _isResolving.value = false;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Obx(() {
+      final verified = _resolvedVerify.value == 1 || _isVerified(widget.isVerify);
+
+      final bool showTick = verified;
+
+      return InkWell(
+        onTap: widget.onTap,
+        child: Row(
+          mainAxisAlignment: widget.mainAxisAlignment ?? MainAxisAlignment.start,
+          crossAxisAlignment: widget.crossAxisAlignment ?? CrossAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Flexible(
+              child: Text(
+                widget.username ?? '',
+                style: widget.style ??
+                    TextStyleCustom.unboundedMedium500(
+                        color: widget.fontColor ?? textDarkGrey(context),
+                        fontSize: widget.fontSize ?? 11,
+                        opacity: widget.opacity),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            if (showTick) const SizedBox(width: 3),
+            if (showTick)
+              Image.asset(
+                widget.icon ?? AssetRes.icBlueTick,
+                height: widget.iconSize ?? 15,
+              ),
+            const SizedBox(width: 6),
+            if (widget.child != null) widget.child!
+          ],
+        ),
+      );
+    });
+  }
+}
+€™

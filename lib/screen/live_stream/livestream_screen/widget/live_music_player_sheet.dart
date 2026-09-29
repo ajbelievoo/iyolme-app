@@ -1,0 +1,269 @@
+import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:shortzz/common/widget/custom_image.dart';
+import 'package:shortzz/screen/live_stream/livestream_screen/livestream_screen_controller.dart';
+import 'package:shortzz/utilities/color_res.dart';
+import 'package:shortzz/utilities/text_style_custom.dart';
+import 'package:shortzz/utilities/theme_res.dart';
+
+class LiveMusicPlayerSheet extends StatefulWidget {
+  final LivestreamScreenController controller;
+
+  const LiveMusicPlayerSheet({
+    super.key,
+    required this.controller,
+  });
+
+  @override
+  State<LiveMusicPlayerSheet> createState() => _LiveMusicPlayerSheetState();
+}
+
+class _LiveMusicPlayerSheetState extends State<LiveMusicPlayerSheet> {
+  String _fmt(int ms) {
+    if (ms < 0) ms = 0;
+    final d = Duration(milliseconds: ms);
+    String two(int n) => n.toString().padLeft(2, '0');
+    final m = d.inMinutes;
+    final s = d.inSeconds % 60;
+    return '${two(m)}:${two(s)}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final safeBottom = MediaQuery.of(context).padding.bottom;
+
+    return SafeArea(
+      top: false,
+      child: Container(
+        width: double.infinity,
+        padding: EdgeInsets.fromLTRB(16, 12, 16, 14 + safeBottom),
+        decoration: BoxDecoration(
+          color: blackPure(context).withValues(alpha: .92),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+          border: Border.all(color: whitePure(context).withValues(alpha: .08)),
+        ),
+        child: Obx(() {
+          final enabled = widget.controller.isLiveMusicEnabled;
+          if (!enabled) {
+            return const SizedBox();
+          }
+
+          final canControl = widget.controller.canControlLiveMusic;
+          final playing = widget.controller.isLiveMusicPlaying;
+
+          final pos = widget.controller.liveMusicPositionMs.value;
+          final dur = widget.controller.liveMusicDurationMs.value;
+
+          final hasPrev = widget.controller.canGoPrevLiveMusic;
+          final hasNext = widget.controller.canGoNextLiveMusic;
+          final repeat = widget.controller.isLiveMusicRepeat;
+
+          final max = (dur > 0 ? dur : (pos > 0 ? pos : 1)).toDouble();
+          final value = pos.clamp(0, max.toInt()).toDouble();
+
+          final title = widget.controller.liveMusicTitle;
+          final artist = widget.controller.liveMusicArtist;
+          final image = widget.controller.liveMusicImage;
+
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Music',
+                      style: TextStyleCustom.unboundedBold700(
+                        fontSize: 16,
+                        color: whitePure(context),
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Get.back(),
+                    icon: Icon(
+                      Icons.keyboard_arrow_down,
+                      color: whitePure(context).withValues(alpha: .9),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: canControl
+                        ? () {
+                            Get.back();
+                            widget.controller.openLiveMusicPicker();
+                          }
+                        : null,
+                    icon: Icon(
+                      Icons.queue_music,
+                      color: canControl
+                          ? whitePure(context).withValues(alpha: .9)
+                          : whitePure(context).withValues(alpha: .35),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () async {
+                      if (canControl) {
+                        await widget.controller.stopLiveMusic();
+                      }
+                      Get.back();
+                    },
+                    icon: Icon(
+                      Icons.close,
+                      color: whitePure(context),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Container(
+                    height: 54,
+                    width: 54,
+                    decoration: BoxDecoration(
+                      color: whitePure(context).withValues(alpha: .06),
+                      borderRadius: BorderRadius.circular(14),
+                      border:
+                          Border.all(color: whitePure(context).withValues(alpha: .1)),
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: (image.trim().isNotEmpty)
+                        ? CustomImage(
+                            size: const Size(54, 54),
+                            radius: 14,
+                            cornerSmoothing: 1,
+                            isShowPlaceHolder: true,
+                            image: image,
+                          )
+                        : Icon(
+                            Icons.music_note,
+                            color: whitePure(context).withValues(alpha: .9),
+                          ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title.trim().isEmpty ? 'Music' : title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyleCustom.unboundedSemiBold600(
+                            fontSize: 14,
+                            color: whitePure(context),
+                          ),
+                        ),
+                        if (artist.trim().isNotEmpty)
+                          Text(
+                            artist,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyleCustom.outFitLight300(
+                              fontSize: 12,
+                              color: whitePure(context).withValues(alpha: .75),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  if (canControl)
+                    IconButton(
+                      onPressed: widget.controller.toggleLiveMusicRepeat,
+                      icon: Icon(
+                        Icons.repeat,
+                        color: repeat
+                            ? ColorRes.themeColor
+                            : whitePure(context).withValues(alpha: .7),
+                      ),
+                    )
+                ],
+              ),
+              const SizedBox(height: 8),
+              Slider(
+                min: 0,
+                max: max,
+                value: value,
+                onChanged: canControl
+                    ? (v) {
+                        widget.controller.seekLiveMusicTo(v.toInt());
+                      }
+                    : null,
+                activeColor: ColorRes.themeColor,
+                inactiveColor: whitePure(context).withValues(alpha: .15),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                child: Row(
+                  children: [
+                    Text(
+                      _fmt(pos),
+                      style: TextStyleCustom.outFitLight300(
+                        fontSize: 12,
+                        color: whitePure(context).withValues(alpha: .75),
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      _fmt(dur),
+                      style: TextStyleCustom.outFitLight300(
+                        fontSize: 12,
+                        color: whitePure(context).withValues(alpha: .75),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  IconButton(
+                    onPressed:
+                        (canControl && hasPrev) ? widget.controller.prevLiveMusic : null,
+                    icon: Icon(
+                      Icons.skip_previous_rounded,
+                      size: 34,
+                      color: canControl && hasPrev
+                          ? whitePure(context)
+                          : whitePure(context).withValues(alpha: .35),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    onPressed: canControl
+                        ? () async {
+                            await widget.controller.toggleLiveMusicPlayPause();
+                          }
+                        : null,
+                    icon: Icon(
+                      playing ? Icons.pause_circle_filled : Icons.play_circle,
+                      size: 48,
+                      color: canControl
+                          ? ColorRes.themeColor
+                          : whitePure(context).withValues(alpha: .35),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    onPressed:
+                        (canControl && hasNext) ? widget.controller.nextLiveMusic : null,
+                    icon: Icon(
+                      Icons.skip_next_rounded,
+                      size: 34,
+                      color: canControl && hasNext
+                          ? whitePure(context)
+                          : whitePure(context).withValues(alpha: .35),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+            ],
+          );
+        }),
+      ),
+    );
+  }
+}

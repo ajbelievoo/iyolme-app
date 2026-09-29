@@ -1,0 +1,18 @@
+gfile:///E:/flutterapp_pro/lib/common/manager/story_view/add_to_cart/drag_to_cart_animation_options.dartÅ¯import 'package:flutter/widgets.dart';
+
+class DragToCartAnimationOptions {
+  /// What Should the given widget's jump duration on jump
+  final Duration duration;
+
+  /// Should the given widget rotate while dragging to the cart
+  final bool isScalable;
+
+  /// What Should the given widget's curve while jump to the cart
+  final Curve curve;
+
+  const DragToCartAnimationOptions({
+    this.duration = const Duration(milliseconds: 800),
+    this.curve = Curves.decelerate,
+    this.isScalable = true,
+  });
+}

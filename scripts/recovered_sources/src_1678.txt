@@ -1,0 +1,16 @@
+‡i†¹†*†:€‹file:///C:/Users/A%20J/AppData/Local/Pub/Cache/hosted/pub.dev/google_maps_flutter_platform_interface-2.15.0/lib/src/types/utils/circle.dart‚2// Copyright 2013 The Flutter Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+import '../types.dart';
+import 'maps_object.dart';
+
+/// Converts an [Iterable] of Circles in a Map of CircleId -> Circle.
+Map<CircleId, Circle> keyByCircleId(Iterable<Circle> circles) {
+  return keyByMapsObjectId<Circle>(circles).cast<CircleId, Circle>();
+}
+
+/// Converts a Set of Circles into something serializable in JSON.
+Object serializeCircleSet(Set<Circle> circles) {
+  return serializeMapsObjectSet(circles);
+}

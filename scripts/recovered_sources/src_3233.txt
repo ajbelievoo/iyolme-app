@@ -1,0 +1,86 @@
+Efile:///E:/flutterapp_pro/lib/model/wallet/earnings_ledger_model.dartˆyclass EarningsLedgerModel {
+  EarningsLedgerModel({this.status, this.data});
+
+  bool? status;
+  EarningsLedgerData? data;
+
+  factory EarningsLedgerModel.fromJson(Map<String, dynamic> json) {
+    return EarningsLedgerModel(
+      status: json['status'] as bool?,
+      data: json['data'] is Map<String, dynamic>
+          ? EarningsLedgerData.fromJson(json['data'] as Map<String, dynamic>)
+          : null,
+    );
+  }
+}
+
+class EarningsLedgerData {
+  EarningsLedgerData({List<EarningsLedgerItem>? items})
+      : items = items ?? const [];
+
+  final List<EarningsLedgerItem> items;
+
+  factory EarningsLedgerData.fromJson(Map<String, dynamic> json) {
+    final rawItems = json['items'];
+    if (rawItems is List) {
+      return EarningsLedgerData(
+        items: rawItems
+            .whereType<Map>()
+            .map((e) => EarningsLedgerItem.fromJson(
+                e.cast<String, dynamic>()))
+            .toList(),
+      );
+    }
+    return EarningsLedgerData(items: const []);
+  }
+}
+
+class EarningsLedgerItem {
+  EarningsLedgerItem({
+    this.id,
+    this.type,
+    this.createdAt,
+    this.amountTokens,
+    this.amountCoins,
+    this.amountUsd,
+    this.meta,
+  });
+
+  String? id;
+  String? type;
+  DateTime? createdAt;
+  num? amountTokens;
+  num? amountCoins;
+  num? amountUsd;
+  Map<String, dynamic>? meta;
+
+  factory EarningsLedgerItem.fromJson(Map<String, dynamic> json) {
+    num? readNum(String key) {
+      final v = json[key];
+      if (v is num) return v;
+      return num.tryParse('${v ?? ''}'.trim());
+    }
+
+    final createdRaw = json['created_at']?.toString();
+    final created = createdRaw == null ? null : DateTime.tryParse(createdRaw);
+
+    final rawMeta = json['meta'];
+    Map<String, dynamic>? meta;
+    if (rawMeta is Map<String, dynamic>) {
+      meta = rawMeta;
+    } else if (rawMeta is Map) {
+      meta = rawMeta.cast<String, dynamic>();
+    }
+
+    return EarningsLedgerItem(
+      id: json['id']?.toString(),
+      type: json['type']?.toString(),
+      createdAt: created,
+      amountTokens: readNum('amount_tokens'),
+      amountCoins: readNum('amount_coins'),
+      amountUsd: readNum('amount_usd'),
+      meta: meta,
+    );
+  }
+}
+W

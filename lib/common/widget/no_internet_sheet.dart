@@ -1,0 +1,132 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:get/get.dart';
+import 'package:shortzz/common/manager/internet_connection_manager.dart';
+import 'package:shortzz/common/widget/text_button_custom.dart';
+import 'package:shortzz/common/widget/theme_blur_bg.dart';
+import 'package:shortzz/languages/languages_keys.dart';
+import 'package:shortzz/utilities/asset_res.dart';
+import 'package:shortzz/utilities/text_style_custom.dart';
+import 'package:shortzz/utilities/theme_res.dart';
+
+class NoInternetSheet extends StatefulWidget {
+  const NoInternetSheet({super.key});
+
+  @override
+  State<NoInternetSheet> createState() => _NoInternetSheetState();
+}
+
+class _NoInternetSheetState extends State<NoInternetSheet> {
+  bool _isChecking = false;
+
+  Future<void> _onRefresh() async {
+    if (_isChecking) return;
+    HapticFeedback.lightImpact();
+    setState(() => _isChecking = true);
+
+    try {
+      final value = await InternetConnectionManager.instance
+          .checkInternetConnection();
+      if (value) {
+        if (mounted && Navigator.of(context).canPop()) {
+          Navigator.of(context).pop();
+        }
+        InternetConnectionManager.instance.callRetryLastAction('', null);
+        return;
+      }
+      Get.snackbar(
+        LKey.connection.tr,
+        LKey.noInternetDesc.tr,
+        backgroundColor: Colors.black.withValues(alpha: 0.45),
+        colorText: Colors.white,
+        snackPosition: SnackPosition.BOTTOM,
+        margin: const EdgeInsets.all(12),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isChecking = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Container(
+        color: scaffoldBackgroundColor(context),
+        child: Stack(
+          children: [
+            const ThemeBlurBg(),
+            SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Spacer(),
+                    Image.asset(
+                      AssetRes.icNoInternet,
+                      width: double.infinity,
+                      fit: BoxFit.fitWidth,
+                    ),
+                    const SizedBox(height: 24),
+                    Text(
+                      '${LKey.lost.tr}\n${LKey.connection.tr}'.toUpperCase(),
+                      style: TextStyleCustom.unboundedBold700(
+                        color: whitePure(context),
+                        fontSize: 35,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      LKey.noInternetDesc.tr,
+                      style: TextStyleCustom.outFitMedium500(
+                        color: whitePure(context),
+                        fontSize: 20,
+                        opacity: 0.8,
+                      ),
+                    ),
+                    const Spacer(),
+                    TextButtonCustom(
+                      onTap: _isChecking ? null : _onRefresh,
+                      title: LKey.refresh.tr,
+                      titleColor: whitePure(context),
+                      backgroundColor: whitePure(context).withValues(alpha: .3),
+                      horizontalMargin: 0,
+                      child: _isChecking
+                          ? Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                        whitePure(context)),
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Text(
+                                  LKey.refresh.tr.capitalize ?? '',
+                                  style: TextStyleCustom.outFitRegular400(
+                                    color: whitePure(context),
+                                    fontSize: 17,
+                                  ),
+                                ),
+                              ],
+                            )
+                          : null,
+                    ),
+                    SizedBox(height: AppBar().preferredSize.height * .5),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

@@ -1,0 +1,68 @@
+class PaidCallCreateModel {
+  bool? status;
+  String? message;
+  String? callId;
+  bool? isPaid;
+  int? costPerMinute;
+  double? commissionPercent;
+  int? netPerMinute;
+
+  PaidCallCreateModel({
+    this.status,
+    this.message,
+    this.callId,
+    this.isPaid,
+    this.costPerMinute,
+    this.commissionPercent,
+    this.netPerMinute,
+  });
+
+  factory PaidCallCreateModel.fromJson(Map<String, dynamic> json) {
+    final data = json['data'];
+    final Map<String, dynamic> d =
+        data is Map ? Map<String, dynamic>.from(data) : const {};
+
+    final rawCallId = json['call_id'] ?? json['callId'] ?? d['call_id'] ?? d['callId'];
+
+    return PaidCallCreateModel(
+      status: json['status'] as bool?,
+      message: json['message']?.toString(),
+      callId: rawCallId?.toString(),
+      isPaid: _toBool(json['isPaid'] ?? json['is_paid'] ?? d['isPaid'] ?? d['is_paid']),
+      costPerMinute: _toInt(json['costPerMinute'] ?? json['cost_per_minute'] ?? d['costPerMinute'] ?? d['cost_per_minute']),
+      commissionPercent: _toDouble(json['commissionPercent'] ??
+          json['commission_percent'] ??
+          json['commission'] ??
+          d['commissionPercent'] ??
+          d['commission_percent'] ??
+          d['commission']),
+      netPerMinute: _toInt(json['netPerMinute'] ?? json['net_per_minute'] ?? d['netPerMinute'] ?? d['net_per_minute']),
+    );
+  }
+}
+
+int? _toInt(dynamic v) {
+  if (v == null) return null;
+  if (v is int) return v;
+  if (v is num) return v.toInt();
+  return int.tryParse('$v');
+}
+
+double? _toDouble(dynamic v) {
+  if (v == null) return null;
+  if (v is double) return v;
+  if (v is num) return v.toDouble();
+  return double.tryParse('$v');
+}
+
+bool? _toBool(dynamic v) {
+  if (v == null) return null;
+  if (v is bool) return v;
+  if (v is num) return v.toInt() == 1;
+  if (v is String) {
+    final s = v.trim().toLowerCase();
+    if (s == '1' || s == 'true' || s == 'yes') return true;
+    if (s == '0' || s == 'false' || s == 'no') return false;
+  }
+  return null;
+}

@@ -1,0 +1,18 @@
+gradle-wrapper.jar
+/.gradle
+/captures/
+/gradlew
+/gradlew.bat
+/local.properties
+
+# Remember to never publicly share your keystore.
+# See https://flutter.dev/to/reference-keystore
+key.properties
+key.properties.txt
+**/*.keystore
+**/*.jks
+# Signing / SSH keys (must never be committed)
+hitune_key
+hitune_key.pub
+id_ed25519
+id_ed25519.pub
