@@ -178,11 +178,11 @@ class _AudioSheetState extends State<AudioSheet> {
                       color: textLightGrey(context), fontSize: 15),
                 ),
                 const SizedBox(height: 25),
-                if ((widget.music?.hituneUrl ?? '').isNotEmpty &&
+                if ((widget.music?.hituneLink ?? '').isNotEmpty &&
                     !(widget.music?.hituneTakenDown ?? false)) ...[
                   TextButtonCustom(
                     onTap: () async {
-                      final uri = Uri.tryParse(widget.music!.hituneUrl!);
+                      final uri = Uri.tryParse(widget.music!.hituneLink!);
                       if (uri != null) {
                         try {
                           await launchUrl(uri,

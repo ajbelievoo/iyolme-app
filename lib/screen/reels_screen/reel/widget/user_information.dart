@@ -368,36 +368,46 @@ class ReelSoundAttribution extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Obx(() {
-      final music = controller.reelData.value.music;
+      final post = controller.reelData.value;
+      final music = post.music;
       final label = music?.attributionLabel ?? '';
       final title = music?.title ?? '';
       final text = label.isNotEmpty
           ? label
           : (title.isNotEmpty ? '♪ $title' : '');
-      if (text.isEmpty || (music?.hituneTakenDown ?? false)) {
+      // Post-level fallback: reels pushed from HiTune carry ai_badge in
+      // post.metadata even when no sound is attached (IYOLME_INTEGRATION.md §6).
+      final aiBadge = (music?.aiBadge ?? '').isNotEmpty
+          ? music!.aiBadge!
+          : (post.hituneAiBadge ?? '');
+      if ((text.isEmpty && aiBadge.isEmpty) ||
+          (music?.hituneTakenDown ?? false)) {
         return const SizedBox();
       }
       return Padding(
         padding: const EdgeInsets.only(top: 6),
         child: InkWell(
-          onTap: () async {
-            FocusManager.instance.primaryFocus?.unfocus();
-            await Get.bottomSheet(AudioSheet(music: music),
-                isScrollControlled: true);
-          },
+          onTap: music == null
+              ? null
+              : () async {
+                  FocusManager.instance.primaryFocus?.unfocus();
+                  await Get.bottomSheet(AudioSheet(music: music),
+                      isScrollControlled: true);
+                },
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Flexible(
-                child: Text(
-                  text,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyleCustom.outFitLight300(
-                      color: whitePure(context), opacity: .85, fontSize: 12),
+              if (text.isNotEmpty)
+                Flexible(
+                  child: Text(
+                    text,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyleCustom.outFitLight300(
+                        color: whitePure(context), opacity: .85, fontSize: 12),
+                  ),
                 ),
-              ),
-              if ((music?.aiBadge ?? '').isNotEmpty) ...[
+              if (aiBadge.isNotEmpty) ...[
                 const SizedBox(width: 6),
                 Container(
                   padding:
@@ -409,7 +419,7 @@ class ReelSoundAttribution extends StatelessWidget {
                         color: const Color(0xFF8B5CF6).withValues(alpha: 0.7)),
                   ),
                   child: Text(
-                    music!.aiBadge!,
+                    aiBadge,
                     style: TextStyleCustom.outFitMedium500(
                         fontSize: 9, color: const Color(0xFFC4B5FD)),
                   ),

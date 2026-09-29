@@ -354,6 +354,30 @@ class Post {
     }
     return null;
   }
+
+  /// HiTune ecosystem metadata stored on reels published from HiTune
+  /// (IYOLME_INTEGRATION.md §6): { source:'hitune', hitune:{...},
+  /// ai_disclosure:{...}, ai_badge?: 'AI Original' }.
+  /// Returns null for regular posts or link-preview metadata.
+  Map<String, dynamic>? get hituneMeta {
+    if (metadata == null || metadata!.isEmpty) {
+      return null;
+    }
+    try {
+      final m = jsonDecode(metadata!);
+      if (m is Map && (m['source'] == 'hitune' || m['hitune'] != null)) {
+        return Map<String, dynamic>.from(m);
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// Post-level AI badge for HiTune-pushed reels (fallback when the
+  /// attached sound has no ai_badge — e.g. AI video without a HiTune sound).
+  String? get hituneAiBadge {
+    final b = hituneMeta?['ai_badge'];
+    return b is String && b.isNotEmpty ? b : null;
+  }
 }
 
 class Images {

@@ -77,7 +77,9 @@ class Music {
     final td = json['hitune_taken_down'];
     hituneTakenDown = td is num ? td.toInt() != 0 : td == true;
     final oi = json['open_in_hitune'];
-    openInHitune = oi is num ? oi.toInt() != 0 : oi == true;
+    // Backend sends the resolved universal link (string) or null for
+    // non-HiTune sounds — never a boolean.
+    openInHitune = oi is String && oi.isNotEmpty ? oi : null;
   }
 
   int? id;
@@ -101,9 +103,15 @@ class Music {
   int? aiPct;
   String? aiBadge;
   bool? hituneTakenDown;
-  bool? openInHitune;
 
-  bool get isFromHitune => (hituneUrl ?? '').isNotEmpty;
+  /// Resolved "open in HiTune" universal link from the backend accessor
+  /// (falls back to music.hitune.in/track/<hash> when hitune_url is empty).
+  String? openInHitune;
+
+  /// Best URL for "Listen Full Song on HiTune".
+  String? get hituneLink =>
+      (hituneUrl ?? '').isNotEmpty ? hituneUrl : openInHitune;
+  bool get isFromHitune => (hituneLink ?? '').isNotEmpty;
   bool get isAiGenerated => (aiPct ?? 0) > 0;
 
   Map<String, dynamic> toJson() {
