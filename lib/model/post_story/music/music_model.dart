@@ -51,6 +51,7 @@ class Music {
     this.aiBadge,
     this.hituneTakenDown,
     this.openInHitune,
+    this.hituneTrackHash,
   });
 
   Music.fromJson(dynamic json) {
@@ -80,6 +81,7 @@ class Music {
     // Backend sends the resolved universal link (string) or null for
     // non-HiTune sounds — never a boolean.
     openInHitune = oi is String && oi.isNotEmpty ? oi : null;
+    hituneTrackHash = json['hitune_track_hash'];
   }
 
   int? id;
@@ -107,6 +109,14 @@ class Music {
   /// Resolved "open in HiTune" universal link from the backend accessor
   /// (falls back to music.hitune.in/track/<hash> when hitune_url is empty).
   String? openInHitune;
+
+  /// HiTune-side identifier (catalog hash, or ai{id}/dist{id} pseudo-hash
+  /// for AI Studio songs and unpublished distribution audio).
+  String? hituneTrackHash;
+
+  /// True when this sound came from the user's own HiTune AI Studio.
+  bool get isAiStudioSong =>
+      hituneTrackHash != null && RegExp(r'^ai\d+$').hasMatch(hituneTrackHash!);
 
   /// Best URL for "Listen Full Song on HiTune".
   String? get hituneLink =>

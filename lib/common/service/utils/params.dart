@@ -76,6 +76,14 @@ class Params {
   static const String storyId = 'story_id';
   static const String sound = 'sound';
   static const String soundID = 'sound_id';
+  static const String hituneTrackHash = 'hitune_track_hash';
+  static const String durationMs = 'duration_ms';
+  static const String cover = 'cover';
+  static const String hituneUrl = 'hitune_url';
+  static const String attributionLabel = 'attribution_label';
+  static const String aiPct = 'ai_pct';
+  static const String aiBadge = 'ai_badge';
+  static const String audioUrl = 'audio_url';
   static const String artist = 'artist';
   static const String image = 'image';
   static const String coins = 'coins';

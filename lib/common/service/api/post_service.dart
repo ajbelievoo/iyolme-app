@@ -557,6 +557,50 @@ class PostService {
     return [];
   }
 
+  /// Resolve a HiTune sound for the iyolme://reel/create deep link.
+  /// Finds (or registers) a tbl_sound row from the deep-link metadata.
+  Future<Music?> resolveHituneSound({
+    required String hituneTrackHash,
+    String? title,
+    String? artist,
+    String? cover,
+    int? durationMs,
+    String? hituneUrl,
+    String? attributionLabel,
+    int? aiPct,
+    String? aiBadge,
+    String? audioUrl,
+  }) async {
+    MusicModel response = await ApiService.instance.call(
+        url: WebService.post.resolveHituneSound,
+        param: {
+          Params.hituneTrackHash: hituneTrackHash,
+          if (title != null) Params.title: title,
+          if (artist != null) Params.artist: artist,
+          if (cover != null) Params.cover: cover,
+          if (durationMs != null) Params.durationMs: durationMs,
+          if (hituneUrl != null) Params.hituneUrl: hituneUrl,
+          if (attributionLabel != null)
+            Params.attributionLabel: attributionLabel,
+          if (aiPct != null) Params.aiPct: aiPct,
+          if (aiBadge != null) Params.aiBadge: aiBadge,
+          if (audioUrl != null) Params.audioUrl: audioUrl,
+        },
+        fromJson: MusicModel.fromJson);
+    if (response.status == true) {
+      return response.data;
+    }
+    return null;
+  }
+
+  /// The logged-in user's own HiTune sounds (AI Studio songs + distribution
+  /// releases) for the reel picker's "My Music" source.
+  Future<MusicsModel> fetchMyHituneMusic() async {
+    return await ApiService.instance.call(
+        url: WebService.post.fetchMyHituneMusic,
+        fromJson: MusicsModel.fromJson);
+  }
+
   Future<Story?> fetchStoryByID(int id) async {
     StoryModel response = await ApiService.instance.call(
         url: WebService.post.fetchStoryByID,

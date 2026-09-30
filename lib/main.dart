@@ -31,6 +31,7 @@ import 'package:shortzz/screen/dashboard_screen/dashboard_screen_controller.dart
 import 'package:shortzz/common/service/admob_native_service.dart';
 import 'package:shortzz/common/service/draft_service.dart';
 import 'package:shortzz/common/service/hitune_auth_service.dart';
+import 'package:shortzz/common/service/hitune_link_service.dart';
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
@@ -187,6 +188,10 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     // HiTune SSO: catch iyolme://auth/hitune?token=…&user_id=… deep links
     // returning from the browser OAuth flow.
     HituneAuthService.shared.init();
+
+    // HiTune ecosystem deep links: iyolme://reel/create (song attached)
+    // and iyolme://story/<id> from the HiTune Music app.
+    HituneLinkService.shared.init();
 
     SystemChannels.navigation.setMethodCallHandler((call) async {
       if (call.method != 'popRoute') return null;

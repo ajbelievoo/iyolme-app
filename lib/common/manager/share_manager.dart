@@ -31,13 +31,16 @@ class ShareManager {
     isListenerConfigured = true;
     AppLinks().uriLinkStream.listen((uri) {
       Loggers.info('Share Link Opened: $uri ${uri.pathSegments} ${uri.path}');
-      if (uri.pathSegments.isNotEmpty) {
+      // Share links are https://iyolme.com/s/<base64> — skip iyolme:// app
+      // deep links (reel/create, story, auth) handled by HituneLinkService.
+      if (uri.scheme != 'https' || uri.pathSegments.isEmpty) return;
+      try {
         var encoded = uri.pathSegments.last;
-        Loggers.success(encoded);
         var decoded = safeBase64Decode(encoded);
-
         var values = decoded.split('_');
         completion(values.first, int.parse(values.last));
+      } catch (e) {
+        Loggers.error('Share link parse failed for $uri: $e');
       }
     });
   }

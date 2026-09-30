@@ -55,6 +55,16 @@ class MusicSheet extends StatelessWidget {
                   onTapOutside: controller.onTapOutside,
                 ),
               ),
+              if (!controller.isForLiveStream)
+                InkWell(
+                  onTap: controller.onMyMusicTap,
+                  borderRadius: BorderRadius.circular(20),
+                  child: Padding(
+                    padding: const EdgeInsets.all(8.0),
+                    child: Icon(Icons.add_circle,
+                        size: 30, color: themeAccentSolid(context)),
+                  ),
+                ),
               Obx(
                 () => controller.isSearch.value
                     ? InkWell(

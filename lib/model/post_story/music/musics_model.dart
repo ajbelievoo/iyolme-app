@@ -5,11 +5,13 @@ class MusicsModel {
     this.status,
     this.message,
     this.data,
+    this.linked,
   });
 
   MusicsModel.fromJson(dynamic json) {
     status = json['status'];
     message = json['message'];
+    linked = json['linked'];
     if (json['data'] != null) {
       data = [];
       json['data'].forEach((v) {
@@ -21,6 +23,10 @@ class MusicsModel {
   bool? status;
   String? message;
   List<Music>? data;
+
+  /// fetchMyHituneMusic returns linked=false when the IyolMe account
+  /// isn't connected to a HiTune account yet.
+  bool? linked;
 
   Map<String, dynamic> toJson() {
     final map = <String, dynamic>{};

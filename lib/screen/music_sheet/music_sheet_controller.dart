@@ -12,6 +12,7 @@ import 'package:shortzz/languages/languages_keys.dart';
 import 'package:shortzz/model/general/settings_model.dart';
 import 'package:shortzz/model/post_story/music/music_model.dart';
 import 'package:shortzz/model/user_model/user_model.dart';
+import 'package:shortzz/screen/my_music_screen/my_music_screen.dart';
 import 'package:shortzz/screen/selected_music_sheet/selected_music_sheet.dart';
 import 'package:shortzz/screen/selected_music_sheet/selected_music_sheet_controller.dart';
 
@@ -207,5 +208,15 @@ class MusicSheetController extends BaseController {
 
   void onTapOutside(PointerDownEvent event) {
     isSearch.value = false;
+  }
+
+  /// "+" button — opens the user's own HiTune sounds (AI Studio songs +
+  /// distribution releases). Returns a Music which then runs the normal
+  /// download → trim-sheet flow.
+  void onMyMusicTap() async {
+    final music = await Get.to<Music>(() => const MyMusicScreen());
+    if (music != null) {
+      onTapMusic(music, false);
+    }
   }
 }

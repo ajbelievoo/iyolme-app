@@ -186,6 +186,8 @@ class _Post {
   String fetchMusicByCategories = "${apiURL}post/fetchMusicByCategories";
   String fetchSavedMusics = "${apiURL}post/fetchSavedMusics";
   String serchMusic = "${apiURL}post/serchMusic";
+  String resolveHituneSound = "${apiURL}post/resolveHituneSound";
+  String fetchMyHituneMusic = "${apiURL}post/fetchMyHituneMusic";
   String createStory = "${apiURL}post/createStory";
   String viewStory = "${apiURL}post/viewStory";
   String deleteStory = "${apiURL}post/deleteStory";
