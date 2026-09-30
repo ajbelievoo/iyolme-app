@@ -57,6 +57,23 @@
    ```
    Fill in the actual values and never commit these files.
 
+## HiTune cross-app loop (added 2026-09-30)
+
+- `lib/common/service/hitune_link_service.dart` — central iyolme:// router
+  (init'd in `main.dart` next to `HituneAuthService.init`): `reel/create`
+  resolves the sound via `post/resolveHituneSound`, downloads it and opens
+  `CameraScreen` with a `SelectedMusic`; `story/<id>` opens `StoryViewSheet`.
+  Cold-start links come through `getInitialLink`.
+- `lib/screen/my_music_screen/` — "My Music" picker (opened from the
+  MusicSheet "+" icon): `post/fetchMyHituneMusic` → AI Studio songs +
+  distribution releases grouped by `Music.isAiStudioSong` (hash `ai{id}`);
+  "Open AI Studio" banner → music.hitune.in/ai-studio; `linked:false`
+  state offers Continue-with-HiTune.
+- `ShareManager.listen` now only accepts `https` share links — iyolme://
+  deep links must never reach the base64 parser.
+- `Music` gained `hituneTrackHash`/`isAiStudioSong`; `MusicsModel` gained
+  `linked`.
+
 ## Known Large Refactors Outstanding
 
 - Split the ~4000-line `livestream_screen_controller.dart` into focused controllers.
