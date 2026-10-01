@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:shortzz/common/controller/base_controller.dart';
 import 'package:shortzz/common/controller/firebase_firestore_controller.dart';
 import 'package:flutter/material.dart';
+import 'package:shortzz/common/manager/account_manager.dart';
 import 'package:shortzz/common/manager/session_manager.dart';
 import 'package:shortzz/common/manager/logger.dart';
 import 'package:shortzz/common/service/api/api_service.dart';
@@ -66,6 +67,10 @@ class UserService {
   static final Map<int, _CachedUserDetails> _fetchUserDetailsCache =
       <int, _CachedUserDetails>{};
   static const int _fetchUserDetailsCacheMs = 5 * 60 * 1000;
+
+  /// Public wrapper so account switching can re-register the push token
+  /// under the newly active account.
+  Future<void> syncDeviceToken() => _syncDeviceTokenAfterLogin();
 
   Future<void> _syncDeviceTokenAfterLogin() async {
     try {
@@ -141,6 +146,7 @@ class UserService {
         SessionManager.instance.setUser(model.data);
         SessionManager.instance.setAuthToken(model.data?.token);
         SessionManager.instance.setLogin(true);
+        AccountManager.instance.saveCurrentSession();
 
         // Ensure backend always gets latest token (common after reinstall / token rotation).
         _syncDeviceTokenAfterLogin();
@@ -171,6 +177,7 @@ class UserService {
         SessionManager.instance.setUser(model.data);
         SessionManager.instance.setAuthToken(model.data?.token);
         SessionManager.instance.setLogin(true);
+        AccountManager.instance.saveCurrentSession();
 
         // Ensure backend always gets latest token (common after reinstall / token rotation).
         _syncDeviceTokenAfterLogin();

@@ -4,6 +4,7 @@ import 'package:shortzz/common/widget/custom_app_bar.dart';
 import 'package:shortzz/common/widget/custom_drop_down.dart';
 import 'package:shortzz/common/widget/custom_toggle.dart';
 import 'package:shortzz/common/controller/smart_assist_controller.dart';
+import 'package:shortzz/common/service/hitune_auth_service.dart';
 import 'package:shortzz/languages/languages_keys.dart';
 import 'package:shortzz/model/user_model/user_model.dart';
 import 'package:shortzz/screen/blocked_user_screen/blocked_user_screen.dart';
@@ -249,6 +250,32 @@ class SettingsScreen extends StatelessWidget {
                           type: TermAndPrivacyType.privacyPolicy));
                     },
                   ),
+
+                  // Accounts section — Instagram-style multi-account switcher
+                  SettingSection(title: 'ACCOUNTS'),
+                  SettingItem(
+                    icon: AssetRes.icProfile,
+                    title: 'Switch Account',
+                    onTap: controller.showAccountSwitcher,
+                  ),
+                  Obx(() {
+                    final u = controller.myUser.value;
+                    final linked = (u?.hituneSub ?? '').isNotEmpty;
+                    return SettingItem(
+                      icon: AssetRes.icMusic,
+                      title: linked
+                          ? 'HiTune: @${u?.hituneUsername ?? 'linked'}'
+                          : 'Link HiTune Account',
+                      onTap: linked
+                          ? null
+                          : () => HituneAuthService.shared.startLogin(),
+                      widget: linked
+                          ? Icon(Icons.check_circle,
+                              color: Colors.green.withValues(alpha: 0.9),
+                              size: 20)
+                          : null,
+                    );
+                  }),
                   SettingItem(
                     icon: AssetRes.icLogout,
                     title: LKey.logOut,

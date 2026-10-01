@@ -48,9 +48,26 @@ class HituneLinkService {
     if (uri.host == 'reel' && uri.pathSegments.isNotEmpty && uri.pathSegments.first == 'create') {
       await _openReelCreate(uri.queryParameters);
     } else if (uri.host == 'story' && uri.pathSegments.isNotEmpty) {
+      if (uri.pathSegments.first == 'create') {
+        await _openStoryCreate();
+        return;
+      }
       final id = int.tryParse(uri.pathSegments.first) ?? 0;
       if (id > 0) await _openStory(id);
+    } else if (uri.host == 'home' || uri.host == '') {
+      // iyolme://home — plain app launch, nothing to route.
+      return;
     }
+  }
+
+  /// iyolme://story/create — open the story camera (HiTune "Your story").
+  Future<void> _openStoryCreate() async {
+    if (!_isLoggedIn) {
+      Loggers.info('iyolme://story/create — login required');
+      _toast('Login required', 'Log in to post a story');
+      return;
+    }
+    Get.to(() => const CameraScreen(cameraType: CameraScreenType.story));
   }
 
   bool get _isLoggedIn => SessionManager.instance.isLogin();

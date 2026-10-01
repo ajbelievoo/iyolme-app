@@ -232,6 +232,8 @@ class User {
     fullname = json['fullname'];
     username = json['username'];
     userEmail = json['user_email'];
+    hituneSub = json['hitune_sub'];
+    hituneUsername = json['hitune_username'];
     mobileCountryCode = json['mobile_country_code'];
     userMobileNo = json['user_mobile_no'];
     profilePhoto = json['profile_photo'];
@@ -394,6 +396,8 @@ class User {
   String? username;
   String? referralCode;
   String? userEmail;
+  String? hituneSub;
+  String? hituneUsername;
   int? mobileCountryCode;
   String? userMobileNo;
   String? profilePhoto;
@@ -457,6 +461,8 @@ class User {
     map['username'] = username;
     map['referral_code'] = referralCode;
     map['user_email'] = userEmail;
+    map['hitune_sub'] = hituneSub;
+    map['hitune_username'] = hituneUsername;
     map['mobile_country_code'] = mobileCountryCode;
     map['user_mobile_no'] = userMobileNo;
     map['profile_photo'] = profilePhoto;

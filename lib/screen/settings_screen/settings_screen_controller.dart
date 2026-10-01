@@ -1,5 +1,9 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:firebase_auth/firebase_auth.dart' as auth;
+import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:shortzz/common/extensions/string_extension.dart';
+import 'package:shortzz/common/manager/account_manager.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:shortzz/common/controller/base_controller.dart';
 import 'package:shortzz/common/controller/firebase_firestore_controller.dart';
@@ -13,6 +17,8 @@ import 'package:shortzz/model/general/settings_model.dart';
 import 'package:shortzz/model/general/status_model.dart';
 import 'package:shortzz/model/user_model/user_model.dart';
 import 'package:shortzz/screen/auth_screen/login_screen.dart';
+import 'package:shortzz/utilities/text_style_custom.dart';
+import 'package:shortzz/utilities/theme_res.dart';
 
 class SettingsScreenController extends BaseController {
   Rx<User?> myUser = Rx<User?>(null);
@@ -131,6 +137,95 @@ class SettingsScreenController extends BaseController {
     } catch (e) {
       Loggers.info("Error: $e");
     }
+  }
+
+  /// Instagram-style account switcher sheet: lists every remembered login,
+  /// lets the user jump between them or add a new one.
+  void showAccountSwitcher() {
+    final accounts = AccountManager.instance.getSavedAccounts();
+    final currentId = SessionManager.instance.getUserID();
+
+    Get.bottomSheet(
+      Builder(builder: (context) {
+        return SafeArea(
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            decoration: BoxDecoration(
+              color: scaffoldBackgroundColor(context),
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(20)),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('Switch account',
+                    style: TextStyleCustom.outFitSemiBold600(
+                        color: textDarkGrey(context), fontSize: 17)),
+                const SizedBox(height: 12),
+                ...accounts.map((a) {
+                  final isCurrent = a.userId == currentId;
+                  return ListTile(
+                    leading: CircleAvatar(
+                      radius: 22,
+                      backgroundColor: bgMediumGrey(context),
+                      backgroundImage: a.profilePhoto.isNotEmpty
+                          ? CachedNetworkImageProvider(a.profilePhoto.addBaseURL())
+                          : null,
+                      child: a.profilePhoto.isEmpty
+                          ? Icon(Icons.person, color: textLightGrey(context))
+                          : null,
+                    ),
+                    title: Text(
+                      a.fullname.isNotEmpty ? a.fullname : a.username,
+                      style: TextStyleCustom.outFitMedium500(
+                          color: textDarkGrey(context), fontSize: 15),
+                    ),
+                    subtitle: Text('@${a.username}',
+                        style: TextStyleCustom.outFitRegular400(
+                            color: textLightGrey(context), fontSize: 13)),
+                    trailing: isCurrent
+                        ? Icon(Icons.check_circle,
+                            color: themeAccentSolid(context))
+                        : IconButton(
+                            icon: Icon(Icons.close,
+                                color: textLightGrey(context), size: 20),
+                            onPressed: () {
+                              AccountManager.instance.removeAccount(a.userId);
+                              Get.back();
+                              showAccountSwitcher();
+                            },
+                          ),
+                    onTap: isCurrent
+                        ? null
+                        : () async {
+                            Get.back();
+                            await AccountManager.instance.switchTo(a);
+                          },
+                  );
+                }),
+                const Divider(height: 24),
+                ListTile(
+                  leading: CircleAvatar(
+                    radius: 22,
+                    backgroundColor: bgMediumGrey(context),
+                    child:
+                        Icon(Icons.add, color: textDarkGrey(context)),
+                  ),
+                  title: Text('Add account',
+                      style: TextStyleCustom.outFitMedium500(
+                          color: textDarkGrey(context), fontSize: 15)),
+                  onTap: () async {
+                    Get.back();
+                    await AccountManager.instance.addAccount();
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      }),
+      isScrollControlled: true,
+    );
   }
 
   void onLogout() {

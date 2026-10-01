@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:app_links/app_links.dart';
 import 'package:get/get.dart';
+import 'package:shortzz/common/manager/account_manager.dart';
 import 'package:shortzz/common/manager/logger.dart';
 import 'package:shortzz/common/manager/session_manager.dart';
 import 'package:shortzz/common/service/api/user_service.dart';
@@ -68,6 +69,7 @@ class HituneAuthService {
     }
     SessionManager.instance.setUser(user);
     SessionManager.instance.setLogin(true);
+    AccountManager.instance.saveCurrentSession();
     Loggers.success('HiTune SSO login complete for uid=$userId');
 
     // Leave the login screen for the main shell.
