@@ -11,7 +11,8 @@ class VideoCacheHelper {
   static const _keyPrefix = 'video_cache_';
   static const expirationMinutes = 360;
 
-  static bool _isDownloading = false;
+  static int _activeDownloads = 0;
+  static const int _maxConcurrentDownloads = 3;
   static final Set<String> _downloadQueue = <String>{};
 
   static final GetStorage _storage = GetStorage(_keyPrefix);
@@ -70,20 +71,23 @@ class VideoCacheHelper {
     _processQueue();
   }
 
-  static Future<void> _processQueue() async {
-    if (_isDownloading) return;
-    if (_downloadQueue.isEmpty) return;
-    _isDownloading = true;
-    try {
+  static void _processQueue() {
+    // Fire up to _maxConcurrentDownloads parallel downloads — serial fetching
+    // made the next reel wait behind the current one (slow scrolling reels).
+    while (_downloadQueue.isNotEmpty &&
+        _activeDownloads < _maxConcurrentDownloads) {
       final url = _downloadQueue.first;
       _downloadQueue.remove(url);
-      await downloadAndCacheVideo(url);
-    } catch (_) {
-    } finally {
-      _isDownloading = false;
-      if (_downloadQueue.isNotEmpty) {
-        Future.microtask(_processQueue);
-      }
+      _activeDownloads++;
+      () async {
+        try {
+          await downloadAndCacheVideo(url);
+        } catch (_) {
+        } finally {
+          _activeDownloads--;
+          _processQueue();
+        }
+      }();
     }
   }
 

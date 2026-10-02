@@ -1,6 +1,8 @@
 import 'dart:convert';
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:get/get.dart';
 import 'package:get_storage/get_storage.dart';
 import 'package:shortzz/common/manager/logger.dart';
@@ -77,6 +79,17 @@ class AppOpenPromotionManager {
 
     _isShowing = true;
     bool attemptedDialog = false;
+
+    // Pre-download the promo artwork before opening the dialog so the
+    // creative is instant instead of a black box that fills in later.
+    final mediaUrl = (promo.mediaUrl ?? '').trim();
+    if (mediaUrl.isNotEmpty) {
+      try {
+        await DefaultCacheManager()
+            .getSingleFile(mediaUrl)
+            .timeout(const Duration(seconds: 4));
+      } catch (_) {}
+    }
 
     // Log impression for analytics + miner points (new backend flow)
     try {
@@ -369,10 +382,13 @@ class _AppOpenPromotionDialog extends StatelessWidget {
                               width: double.infinity,
                               color: Colors.black,
                               child: Center(
-                                child: Image.network(
-                                  promotion.mediaUrl ?? '',
+                                child: CachedNetworkImage(
+                                  imageUrl: promotion.mediaUrl ?? '',
                                   fit: BoxFit.contain,
-                                  errorBuilder: (_, __, ___) => const SizedBox(),
+                                  fadeInDuration: Duration.zero,
+                                  placeholder: (_, __) => const SizedBox(),
+                                  errorWidget: (_, __, ___) =>
+                                      const SizedBox(),
                                 ),
                               ),
                             ),

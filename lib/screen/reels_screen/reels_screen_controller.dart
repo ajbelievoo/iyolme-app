@@ -32,6 +32,7 @@ class ReelsScreenController extends BaseController {
   final Map<int, int> _watchedMs = <int, int>{};
   final Set<int> _viewRewardedPostIds = <int>{};
   final Set<int> _failedInitIndices = <int>{};
+  final Map<int, Future<void>> _initFutures = <int, Future<void>>{};
   int _currentlyPlayingIndex = -1;
 
   DashboardScreenController dashboardController =
@@ -135,23 +136,26 @@ class ReelsScreenController extends BaseController {
   Future<void> prewarmFirstReel({required int atIndex}) async {
     if (reels.isEmpty) return;
     final idx = atIndex.clamp(0, reels.length - 1);
-    // Warm the poster thumbnails for the first reels so the placeholder is
-    // instant while the video initializes.
+    // Warm posters + start downloading the first few MP4s immediately so the
+    // first swipes play from disk instead of streaming.
     for (int i = idx; i <= idx + 2 && i < reels.length; i++) {
       _precacheThumbnail(reels[i]);
+      _enqueueMp4Download(reels[i]);
     }
     await _initializeControllerAtIndex(idx);
-    final vc = videoControllers[idx];
-    if (vc != null && vc.value.isInitialized) {
-      final rawMp4 = (reels[idx].video ?? '').trim();
-      final mp4Url = rawMp4.isNotEmpty ? rawMp4.addBaseURL() : '';
-      if (mp4Url.isNotEmpty) {
-        final lower = mp4Url.toLowerCase();
-        final isMp4 = lower.endsWith('.mp4') || lower.contains('.mp4?');
-        if (isMp4) {
-          VideoCacheHelper.enqueueDownload(mp4Url);
-        }
-      }
+    // Pre-initialize the next two controllers — when the user swipes, the
+    // player is already initialized and starts instantly.
+    unawaited(_initializeControllerAtIndex(idx + 1));
+    unawaited(_initializeControllerAtIndex(idx + 2));
+  }
+
+  void _enqueueMp4Download(Post reel) {
+    final rawMp4 = (reel.video ?? '').trim();
+    if (rawMp4.isEmpty) return;
+    final mp4Url = rawMp4.addBaseURL();
+    final lower = mp4Url.toLowerCase();
+    if (lower.endsWith('.mp4') || lower.contains('.mp4?')) {
+      VideoCacheHelper.enqueueDownload(mp4Url);
     }
   }
 
@@ -241,11 +245,12 @@ class ReelsScreenController extends BaseController {
     /// Play 1st video
     _playControllerAtIndex(position.value);
 
-    /// Initialize 2nd vide
+    /// Initialize neighbours
     if (position >= 0) {
       await _initializeControllerAtIndex(position.value - 1);
     }
     await _initializeControllerAtIndex(position.value + 1);
+    unawaited(_initializeControllerAtIndex(position.value + 2));
   }
 
   void _playNextReel(int index) {
@@ -265,6 +270,7 @@ class ReelsScreenController extends BaseController {
     _disposeControllerAtIndex(index - 2);
     _playControllerAtIndex(index);
     _initializeControllerAtIndex(index + 1);
+    _initializeControllerAtIndex(index + 2);
   }
 
   void _playPreviousReel(int index) {
@@ -295,12 +301,26 @@ class ReelsScreenController extends BaseController {
     if (_failedInitIndices.contains(index)) {
       return;
     }
-    
+
+    // If an init for this index is already in-flight, await it — otherwise the
+    // player would see a controller exists but is uninitialized and stall on
+    // the poster forever.
+    final inFlight = _initFutures[index];
+    if (inFlight != null) {
+      return inFlight;
+    }
+
     if (videoControllers.containsKey(index)) {
       return;
     }
 
-    await _doInitializeControllerAtIndex(index);
+    final fut = _doInitializeControllerAtIndex(index);
+    _initFutures[index] = fut;
+    try {
+      await fut;
+    } finally {
+      _initFutures.remove(index);
+    }
   }
   
   Future _doInitializeControllerAtIndex(int index) async {
@@ -314,7 +334,6 @@ class ReelsScreenController extends BaseController {
     if (reels.first.id == -1) {
       controller = VideoPlayerController.file(File(reels.first.video ?? ''));
     } else {
-      // Check for HLS first (better streaming), fallback to MP4
       hlsUrl = reels[index].videoHls?.addBaseURL();
       videoUrl = reels[index].video?.addBaseURL();
 
@@ -323,14 +342,29 @@ class ReelsScreenController extends BaseController {
         return;
       }
 
-      // Prefer HLS if available, otherwise use MP4
-      final urlToUse = (hlsUrl?.isNotEmpty ?? false) ? hlsUrl! : videoUrl!;
-      Loggers.info('🎬 Using ${hlsUrl?.isNotEmpty ?? false ? "HLS" : "MP4"} for reel $index: $urlToUse');
+      // A fully-downloaded MP4 starts instantly — prefer it over streaming HLS.
+      final mp4 = (videoUrl ?? '');
+      final lower = mp4.toLowerCase();
+      final isMp4 = lower.endsWith('.mp4') || lower.contains('.mp4?');
+      FileInfo? cachedFile;
+      if (isMp4) {
+        cachedFile = await VideoCacheHelper.getValidCachedVideo(mp4);
+      }
 
-      controller = await getVideoPlayerController(
-        urlToUse,
-        prefetch: index != position.value,
-      );
+      if (cachedFile != null) {
+        Loggers.info('⚡ Cached MP4 for reel $index: ${cachedFile.file.path}');
+        controller = VideoPlayerController.file(cachedFile.file);
+        hlsUrl = null; // file playback — no HLS fallback needed
+      } else {
+        // Prefer HLS if available, otherwise use MP4
+        final urlToUse = (hlsUrl?.isNotEmpty ?? false) ? hlsUrl! : videoUrl!;
+        Loggers.info('🎬 Using ${hlsUrl?.isNotEmpty ?? false ? "HLS" : "MP4"} for reel $index: $urlToUse');
+
+        controller = await getVideoPlayerController(
+          urlToUse,
+          prefetch: index != position.value,
+        );
+      }
     }
 
     /// Add to [controllers] list
