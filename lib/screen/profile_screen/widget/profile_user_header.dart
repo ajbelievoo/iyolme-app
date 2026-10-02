@@ -803,7 +803,7 @@ class _HiTuneCard extends StatelessWidget {
               launchUrl(Uri.parse('https://music.hitune.in/'),
                   mode: LaunchMode.externalApplication);
             } else {
-              HituneAuthService.shared.startLogin();
+              HituneAuthService.shared.startLink();
             }
           },
           child: Container(

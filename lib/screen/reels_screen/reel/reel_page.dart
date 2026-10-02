@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:figma_squircle_updated/figma_squircle.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -63,17 +64,21 @@ class ReelPage extends StatelessWidget {
       final thumb = (reelData.getThumbnail).trim();
       final url = thumb.isNotEmpty ? thumb.addBaseURL() : '';
       if (url.isEmpty) {
-        return Container(color: Colors.black);
+        return Container(color: const Color(0xFF14141C));
       }
+      final mq = MediaQuery.of(context);
       return SizedBox.expand(
-        child: Image.network(
-          url,
+        child: CachedNetworkImage(
+          imageUrl: url,
           fit: BoxFit.cover,
-          errorBuilder: (context, error, stackTrace) => Container(color: Colors.black),
-          loadingBuilder: (context, child, loadingProgress) {
-            if (loadingProgress == null) return child;
-            return Container(color: Colors.black);
-          },
+          // Decode at display size and reuse the feed's disk cache — the same
+          // thumbnail was already fetched for the grid, so this is instant.
+          memCacheWidth: (mq.size.width * mq.devicePixelRatio).round(),
+          fadeInDuration: Duration.zero,
+          placeholder: (context, _) =>
+              Container(color: const Color(0xFF14141C)),
+          errorWidget: (context, _, __) =>
+              Container(color: const Color(0xFF14141C)),
         ),
       );
     }

@@ -239,7 +239,16 @@ class _DashboardScreenState extends State<DashboardScreen>
           postUpload.uploadType == UploadType.none ? false : true;
       return AnimatedContainer(
         duration: const Duration(milliseconds: 100),
-        color: blackPure(context),
+        // Slightly elevated surface so icons don't sit on pure black —
+        // keeps the dark look but the bar reads as a distinct element.
+        decoration: BoxDecoration(
+          color: const Color(0xFF1B1B22),
+          border: Border(
+            top: BorderSide(
+              color: whitePure(context).withValues(alpha: 0.08),
+            ),
+          ),
+        ),
         padding: const EdgeInsets.only(top: 5),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -363,7 +372,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                   GradientIcon(
                           gradient: isSelected
                               ? null
-                              : StyleRes.textDarkGreyGradient(),
+                              : StyleRes.textLightGreyGradient(opacity: 0.95),
                           child: Image.asset(controller.bottomIconList[index],
                               height: 38, width: 38),
                         ),

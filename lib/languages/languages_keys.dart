@@ -5,6 +5,8 @@ class LKey {
   static const String shareYourTalent =
       "Share your talent with the\npeople around the world\nand build your healthy fanbase.";
   static const String next = "Next";
+  static const String skip = "Skip";
+  static const String getStarted = "Get Started";
   static const String getAppreciated = "GET\nAPPRECIATED";
   static const String select = "Select";
   static const String collectLikesAndComments =

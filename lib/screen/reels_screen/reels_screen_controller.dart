@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:get/get.dart';
 import 'package:shortzz/common/controller/base_controller.dart';
 import 'package:shortzz/common/extensions/string_extension.dart';
@@ -134,6 +135,11 @@ class ReelsScreenController extends BaseController {
   Future<void> prewarmFirstReel({required int atIndex}) async {
     if (reels.isEmpty) return;
     final idx = atIndex.clamp(0, reels.length - 1);
+    // Warm the poster thumbnails for the first reels so the placeholder is
+    // instant while the video initializes.
+    for (int i = idx; i <= idx + 2 && i < reels.length; i++) {
+      _precacheThumbnail(reels[i]);
+    }
     await _initializeControllerAtIndex(idx);
     final vc = videoControllers[idx];
     if (vc != null && vc.value.isInitialized) {
@@ -147,6 +153,15 @@ class ReelsScreenController extends BaseController {
         }
       }
     }
+  }
+
+  void _precacheThumbnail(Post reel) {
+    final url = reel.getThumbnail.trim();
+    if (url.isEmpty) return;
+    DefaultCacheManager()
+        .getSingleFile(url.addBaseURL())
+        .then((_) {})
+        .catchError((_) {});
   }
 
   void startIfNeeded() {
@@ -284,6 +299,8 @@ class ReelsScreenController extends BaseController {
   }
   
   Future _doInitializeControllerAtIndex(int index) async {
+
+    _precacheThumbnail(reels[index]);
 
     final VideoPlayerController controller;
     String? videoUrl;

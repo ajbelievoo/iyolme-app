@@ -117,6 +117,9 @@ class _User {
   String verifySubscription = "${apiURL}user/verify-subscription";
   String subscriptionPlans = "${apiURL}user/subscription-plans";
 
+  // HiTune account linking (app-facing, authtoken header)
+  String hituneLinkIntent = "${apiURL}hitune/link_intent";
+
   // Chat Themes + Stickers
   String chatThemes = "${apiURL}user/chat-themes";
   String setChatTheme = "${apiURL}set_chat_theme";

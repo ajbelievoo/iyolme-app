@@ -72,6 +72,27 @@ class UserService {
   /// under the newly active account.
   Future<void> syncDeviceToken() => _syncDeviceTokenAfterLogin();
 
+  /// Ask the backend for a HiTune account-link URL bound to the CURRENT
+  /// IyolMe user. Returns `data` map: `url` to open, or
+  /// `already_linked: true` + `hitune_username`.
+  Future<Map<String, dynamic>?> hituneLinkIntent() async {
+    try {
+      final res = await ApiService.instance.call(
+        url: WebService.user.hituneLinkIntent,
+        param: const {},
+      );
+      if (res is Map<String, dynamic> && res['status'] == true) {
+        final data = res['data'];
+        if (data is Map<String, dynamic>) return data;
+        if (data is Map) return Map<String, dynamic>.from(data);
+      }
+      return null;
+    } catch (e) {
+      Loggers.error('[HITUNE_LINK] intent failed: $e');
+      return null;
+    }
+  }
+
   Future<void> _syncDeviceTokenAfterLogin() async {
     try {
       final token = await FirebaseMessaging.instance.getToken();

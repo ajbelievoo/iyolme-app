@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:app_links/app_links.dart';
 import 'package:get/get.dart';
+import 'package:shortzz/common/controller/base_controller.dart';
 import 'package:shortzz/common/manager/account_manager.dart';
 import 'package:shortzz/common/manager/logger.dart';
 import 'package:shortzz/common/manager/session_manager.dart';
@@ -28,10 +29,64 @@ class HituneAuthService {
   Future<void> startLogin() async {
     final uri = Uri.parse('${baseURL}hitune/login');
     try {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
+      final launched =
+          await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!launched) {
+        _toast('HiTune', 'Could not open the browser — please try again');
+      }
     } catch (e) {
       Loggers.error('HiTune login launch failed: $e');
+      _toast('HiTune', 'Could not open HiTune login — please try again');
     }
+  }
+
+  /// Link the CURRENT IyolMe account to a HiTune account.
+  ///
+  /// Unlike [startLogin] (which logs you in as the HiTune-mapped user), this
+  /// binds `hitune_sub` onto the already signed-in user: the app asks the
+  /// backend for a one-time link intent, opens the OAuth URL, and the
+  /// callback deep-links back as iyolme://auth/hitune_link (handled by
+  /// HituneLinkService).
+  Future<void> startLink() async {
+    if (_busy) return;
+    _busy = true;
+    try {
+      BaseController.share.showLoader();
+      final data = await UserService.instance.hituneLinkIntent();
+      BaseController.share.stopLoader();
+      if (data == null) {
+        _toast('HiTune', 'Could not start linking — check your connection');
+        return;
+      }
+      if (data['already_linked'] == true) {
+        final name = (data['hitune_username'] ?? '').toString();
+        _toast('HiTune',
+            name.isNotEmpty ? 'Already linked as @$name' : 'Already linked');
+        return;
+      }
+      final url = (data['url'] ?? '').toString();
+      if (url.isEmpty) {
+        _toast('HiTune', 'Could not start linking — please try again');
+        return;
+      }
+      final launched = await launchUrl(Uri.parse(url),
+          mode: LaunchMode.externalApplication);
+      if (!launched) {
+        _toast('HiTune', 'Could not open the browser — please try again');
+      }
+    } catch (e) {
+      Loggers.error('HiTune link launch failed: $e');
+      _toast('HiTune', 'Could not open HiTune linking — please try again');
+    } finally {
+      BaseController.share.stopLoader();
+      _busy = false;
+    }
+  }
+
+  void _toast(String title, String msg) {
+    try {
+      Get.snackbar(title, msg, snackPosition: SnackPosition.BOTTOM);
+    } catch (_) {}
   }
 
   /// Listen once for the iyolme://auth/hitune deep link carrying token+user_id.

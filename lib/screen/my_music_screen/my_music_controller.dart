@@ -1,6 +1,7 @@
 import 'package:get/get.dart';
 import 'package:shortzz/common/controller/base_controller.dart';
 import 'package:shortzz/common/manager/logger.dart';
+import 'package:shortzz/common/manager/session_manager.dart';
 import 'package:shortzz/common/service/api/post_service.dart';
 import 'package:shortzz/common/service/hitune_auth_service.dart';
 import 'package:shortzz/model/post_story/music/music_model.dart';
@@ -50,7 +51,11 @@ class MyMusicController extends BaseController {
   }
 
   Future<void> onConnectHitune() async {
-    await HituneAuthService.shared.startLogin();
+    if (SessionManager.instance.isLogin()) {
+      await HituneAuthService.shared.startLink();
+    } else {
+      await HituneAuthService.shared.startLogin();
+    }
   }
 
   Future<void> onOpenAiStudio() async {

@@ -8,6 +8,7 @@ import 'package:shortzz/common/extensions/string_extension.dart';
 import 'package:shortzz/common/manager/logger.dart';
 import 'package:shortzz/common/manager/session_manager.dart';
 import 'package:shortzz/common/service/api/post_service.dart';
+import 'package:shortzz/common/service/api/user_service.dart';
 import 'package:shortzz/model/post_story/story/story_model.dart';
 import 'package:shortzz/screen/camera_screen/camera_screen.dart';
 import 'package:shortzz/screen/selected_music_sheet/selected_music_sheet_controller.dart';
@@ -47,6 +48,10 @@ class HituneLinkService {
 
     if (uri.host == 'reel' && uri.pathSegments.isNotEmpty && uri.pathSegments.first == 'create') {
       await _openReelCreate(uri.queryParameters);
+    } else if (uri.host == 'auth' &&
+        uri.pathSegments.isNotEmpty &&
+        uri.pathSegments.first == 'hitune_link') {
+      await _handleHituneLinked(uri.queryParameters);
     } else if (uri.host == 'story' && uri.pathSegments.isNotEmpty) {
       if (uri.pathSegments.first == 'create') {
         await _openStoryCreate();
@@ -120,6 +125,27 @@ class HituneLinkService {
     } finally {
       BaseController.share.stopLoader();
       _busy = false;
+    }
+  }
+
+  /// iyolme://auth/hitune_link?ok=1&username=x — result of the account-link
+  /// flow (HituneAuthService.startLink). Refresh the profile so the
+  /// "HiTune: @user" rows update immediately.
+  Future<void> _handleHituneLinked(Map<String, String> q) async {
+    if (q['ok'] == '1') {
+      final name = q['username'] ?? '';
+      _toast('HiTune linked',
+          name.isNotEmpty ? 'Connected as @$name' : 'Account linked');
+      final uid = SessionManager.instance.getUserID();
+      if (uid > 0) {
+        try {
+          await UserService.instance
+              .fetchUserDetails(userId: uid, forceRefresh: true);
+        } catch (_) {}
+      }
+    } else {
+      _toast('HiTune link failed',
+          (q['error'] ?? 'Please try again').replaceAll('+', ' '));
     }
   }
 

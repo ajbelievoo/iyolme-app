@@ -1,8 +1,10 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:get/get.dart';
 import 'package:shortzz/common/controller/base_controller.dart';
+import 'package:shortzz/common/extensions/string_extension.dart';
 import 'package:shortzz/common/manager/ads_manager.dart';
 import 'package:shortzz/common/manager/logger.dart';
 import 'package:shortzz/common/manager/session_manager.dart';
@@ -22,6 +24,20 @@ class SelectLanguageScreenController extends BaseController {
   void onInit() {
     super.onInit();
     initLanguage();
+    _warmOnboardingImages();
+  }
+
+  /// Warm the disk cache with onboarding artwork while the user is picking a
+  /// language — by the time the intro screens open, images render instantly.
+  void _warmOnboardingImages() {
+    for (final item in setting?.onBoarding ?? []) {
+      final url = (item.image ?? '').addBaseURL();
+      if (url.isEmpty) continue;
+      DefaultCacheManager()
+          .getSingleFile(url)
+          .then((_) {})
+          .catchError((_) {});
+    }
   }
 
   @override

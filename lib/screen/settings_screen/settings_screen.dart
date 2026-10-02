@@ -268,7 +268,7 @@ class SettingsScreen extends StatelessWidget {
                           : 'Link HiTune Account',
                       onTap: linked
                           ? null
-                          : () => HituneAuthService.shared.startLogin(),
+                          : () => HituneAuthService.shared.startLink(),
                       widget: linked
                           ? Icon(Icons.check_circle,
                               color: Colors.green.withValues(alpha: 0.9),
