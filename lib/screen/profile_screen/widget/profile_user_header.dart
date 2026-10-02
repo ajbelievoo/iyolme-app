@@ -19,6 +19,8 @@ import 'package:shortzz/screen/profile_screen/profile_screen_controller.dart';
 import 'package:shortzz/screen/profile_screen/widget/post_options_sheet.dart';
 import 'package:shortzz/screen/profile_screen/widget/profile_preview_interactive_screen.dart';
 import 'package:shortzz/screen/profile_screen/widget/user_link_sheet.dart';
+import 'package:shortzz/common/service/hitune_auth_service.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:shortzz/screen/professional_dashboard_screen/monetization_page.dart';
 import 'package:shortzz/screen/professional_dashboard_screen/professional_dashboard_screen.dart';
 import 'package:shortzz/screen/scratch_collect/asset_vault_screen.dart';
@@ -93,6 +95,7 @@ class ProfileUserHeader extends StatelessWidget {
                 _BadgesRow(user: user),
                 const SizedBox(height: 6),
                 _ProDashboardCard(user: user),
+                _HiTuneCard(user: user),
                 UserButtonView(user: user, controller: controller),
                 const SizedBox(height: 10),
               ],
@@ -767,6 +770,104 @@ class UserButtonView extends StatelessWidget {
               ),
             )
         ],
+      ),
+    );
+  }
+}
+
+/// "HiTune Music" relationship card on the user's own profile — shows the
+/// linked HiTune account and opens the HiTune app/site, or starts the
+/// link flow ("Continue with HiTune") when not connected yet.
+class _HiTuneCard extends StatelessWidget {
+  final User? user;
+
+  const _HiTuneCard({required this.user});
+
+  @override
+  Widget build(BuildContext context) {
+    final isMe = user?.id?.toInt() == SessionManager.instance.getUserID();
+    if (!isMe) return const SizedBox.shrink();
+
+    final linked = (user?.hituneSub ?? '').isNotEmpty;
+    final htName = user?.hituneUsername ?? '';
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(14),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: () {
+            if (linked) {
+              launchUrl(Uri.parse('https://music.hitune.in/'),
+                  mode: LaunchMode.externalApplication);
+            } else {
+              HituneAuthService.shared.startLogin();
+            }
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(14),
+              gradient: LinearGradient(
+                colors: [
+                  const Color(0xFF0FA8D4).withValues(alpha: 0.16),
+                  const Color(0xFFE56BD8).withValues(alpha: 0.16),
+                ],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              border: Border.all(
+                  color: themeAccentSolid(context).withValues(alpha: 0.3)),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: whitePure(context).withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Center(
+                    child: Image.asset(AssetRes.icMusic,
+                        width: 20, height: 20, color: themeAccentSolid(context)),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('HiTune Music',
+                          style: TextStyleCustom.outFitSemiBold600(
+                              color: textDarkGrey(context), fontSize: 14)),
+                      const SizedBox(height: 2),
+                      Text(
+                        linked
+                            ? 'Connected · @${htName.isNotEmpty ? htName : 'hitune'}'
+                            : 'Link HiTune — use your songs in reels',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyleCustom.outFitRegular400(
+                            color: linked
+                                ? Colors.green
+                                : textLightGrey(context),
+                            fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(
+                  linked ? Icons.open_in_new : Icons.link,
+                  size: 18,
+                  color: textLightGrey(context),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

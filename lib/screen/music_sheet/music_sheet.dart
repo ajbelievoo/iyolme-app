@@ -59,10 +59,29 @@ class MusicSheet extends StatelessWidget {
                 InkWell(
                   onTap: controller.onMyMusicTap,
                   borderRadius: BorderRadius.circular(20),
-                  child: Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: Icon(Icons.add_circle,
-                        size: 30, color: themeAccentSolid(context)),
+                  child: Container(
+                    margin: const EdgeInsets.only(left: 4),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 7),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(20),
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF0FA8D4), Color(0xFFE56BD8)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.music_note,
+                            size: 16, color: Colors.white),
+                        const SizedBox(width: 4),
+                        Text('HiTune',
+                            style: TextStyleCustom.outFitSemiBold600(
+                                fontSize: 12, color: Colors.white)),
+                      ],
+                    ),
                   ),
                 ),
               Obx(
