@@ -340,9 +340,12 @@ class Post {
   }
 
   String get getThumbnail {
-    return (postType == PostType.image
-        ? (images?.first.image ?? '')
-        : (thumbnail ?? ''));
+    if (postType == PostType.image) {
+      return (images != null && images!.isNotEmpty)
+          ? (images!.first.image ?? '')
+          : '';
+    }
+    return (thumbnail ?? '');
   }
 
   UrlMetadata? get metaData {

@@ -61,7 +61,12 @@ class ReelPage extends StatelessWidget {
     }
 
     Widget buildThumbnail() {
-      final thumb = (reelData.getThumbnail).trim();
+      String thumb;
+      try {
+        thumb = reelData.getThumbnail.trim();
+      } catch (_) {
+        thumb = '';
+      }
       final url = thumb.isNotEmpty ? thumb.addBaseURL() : '';
       if (url.isEmpty) {
         return Container(color: const Color(0xFF14141C));

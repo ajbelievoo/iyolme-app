@@ -156,7 +156,12 @@ class ReelsScreenController extends BaseController {
   }
 
   void _precacheThumbnail(Post reel) {
-    final url = reel.getThumbnail.trim();
+    String url;
+    try {
+      url = reel.getThumbnail.trim();
+    } catch (_) {
+      return;
+    }
     if (url.isEmpty) return;
     DefaultCacheManager()
         .getSingleFile(url.addBaseURL())
