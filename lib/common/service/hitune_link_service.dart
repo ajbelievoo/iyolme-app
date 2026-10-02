@@ -9,7 +9,6 @@ import 'package:shortzz/common/manager/logger.dart';
 import 'package:shortzz/common/manager/session_manager.dart';
 import 'package:shortzz/common/service/api/post_service.dart';
 import 'package:shortzz/common/service/api/user_service.dart';
-import 'package:shortzz/model/post_story/story/story_model.dart';
 import 'package:shortzz/screen/camera_screen/camera_screen.dart';
 import 'package:shortzz/screen/selected_music_sheet/selected_music_sheet_controller.dart';
 import 'package:shortzz/screen/story_view_screen/story_view_screen.dart';

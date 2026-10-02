@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:get/get.dart';
 import 'package:shortzz/common/controller/base_controller.dart';
-import 'package:shortzz/common/extensions/string_extension.dart';
 import 'package:shortzz/common/manager/ads_manager.dart';
 import 'package:shortzz/common/manager/logger.dart';
 import 'package:shortzz/common/manager/session_manager.dart';
