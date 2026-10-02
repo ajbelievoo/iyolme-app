@@ -29,14 +29,18 @@ class SelectLanguageScreenController extends BaseController {
   /// Warm the disk cache with onboarding artwork while the user is picking a
   /// language — by the time the intro screens open, images render instantly.
   void _warmOnboardingImages() {
-    for (final item in setting?.onBoarding ?? []) {
-      final url = (item.image ?? '').addBaseURL();
-      if (url.isEmpty) continue;
-      DefaultCacheManager()
-          .getSingleFile(url)
-          .then((_) {})
-          .catchError((_) {});
-    }
+    try {
+      final base = SessionManager.instance.getSettings()?.itemBaseUrl ?? '';
+      for (final item in setting?.onBoarding ?? const <OnBoarding>[]) {
+        final img = item.image;
+        if (img == null || img.isEmpty) continue;
+        final url = img.startsWith('http') ? img : '$base$img';
+        DefaultCacheManager()
+            .getSingleFile(url)
+            .then((_) {})
+            .catchError((_) {});
+      }
+    } catch (_) {}
   }
 
   @override
